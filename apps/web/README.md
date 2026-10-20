@@ -1,6 +1,9 @@
 # apps/web
 
-Web 工作台。设计稿与交互原型目前在 `ui-ux-design/`（本地参考素材，不纳入版本库），迁入本目录前先确认技术栈与路由结构。
+React + Vite 管理工作台。平台、提供商和调试台页面连接 `apps/server` 的本机 API。
 
-- 技术栈倾向：React + Vite（见设计文档）。
-- 数据来源：`apps/server` 暴露的 HTTP/WS API。
+```powershell
+npm run dev --workspace=@miubot/web
+```
+
+默认地址为 `http://127.0.0.1:5173`，开发代理将 `/api` 请求转发到 `http://127.0.0.1:8787`。

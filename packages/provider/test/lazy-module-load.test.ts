@@ -35,7 +35,7 @@ function runProbe(action: string): ProbeResult {
 		console.log(JSON.stringify({ loadedSpecifiers: [...new Set(loaded)] }));
 	`;
 
-	const result = spawnSync(process.execPath, ["--input-type=module", "--eval", script], {
+	const result = spawnSync(process.execPath, ["--conditions=source", "--input-type=module", "--eval", script], {
 		cwd: packageRoot,
 		encoding: "utf8",
 	});
@@ -56,10 +56,7 @@ function runProbe(action: string): ProbeResult {
 	return JSON.parse(lastLine) as ProbeResult;
 }
 
-// These probes spawn a Node subprocess that imports source files whose transitive
-// imports use @miubot/* bare specifiers. Resolving those requires workspace
-// symlinks, which the exFAT workspace volume cannot create. Re-enable on NTFS.
-describe.skip("lazy provider module loading", () => {
+describe("lazy provider module loading", () => {
 	it("does not load provider SDKs when importing the root barrel", () => {
 		const result = runProbe("");
 		expect(result.loadedSpecifiers).toEqual([]);

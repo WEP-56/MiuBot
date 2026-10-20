@@ -1,5 +1,7 @@
 node_modules
 dist/
+.miubot/
+apps/server/.miubot/
 .artifacts/
 *.log
 .DS_Store

@@ -4,27 +4,8 @@
 		"noEmit": true,
 		"module": "NodeNext",
 		"moduleResolution": "NodeNext",
-		"paths": {
-			"@miubot/shared": ["./packages/shared/src/index.ts"],
-			"@miubot/shared/*": ["./packages/shared/src/*", "./packages/shared/src/*.ts"],
-			"@miubot/context": ["./packages/context/src/index.ts"],
-			"@miubot/context/*": ["./packages/context/src/*", "./packages/context/src/*.ts"],
-			"@miubot/plugin": ["./packages/plugin/src/index.ts"],
-			"@miubot/plugin/*": ["./packages/plugin/src/*", "./packages/plugin/src/*.ts"],
-			"@miubot/session": ["./packages/session/src/index.ts"],
-			"@miubot/session/*": ["./packages/session/src/*", "./packages/session/src/*.ts"],
-			"@miubot/provider": ["./packages/provider/src/index.ts"],
-			"@miubot/provider/*": ["./packages/provider/src/*", "./packages/provider/src/*.ts"],
-			"@miubot/agent": ["./packages/agent/src/index.ts"],
-			"@miubot/agent/*": ["./packages/agent/src/*", "./packages/agent/src/*.ts"],
-			"@miubot/telemetry": ["./packages/telemetry/src/index.ts"],
-			"@miubot/telemetry/*": ["./packages/telemetry/src/*", "./packages/telemetry/src/*.ts"],
-			"@miubot/mcp": ["./packages/mcp/src/index.ts"],
-			"@miubot/mcp/*": ["./packages/mcp/src/*", "./packages/mcp/src/*.ts"],
-			"typebox": ["./node_modules/typebox"],
-			"typebox/*": ["./node_modules/typebox/*"]
-		}
+		"customConditions": ["source"]
 	},
-	"include": ["packages/*/src/**/*", "packages/*/test/**/*"],
+	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "apps/server/src/**/*"],
 	"exclude": ["**/dist/**"]
 }

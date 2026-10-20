@@ -27,9 +27,7 @@ const preload = `data:text/javascript,${encodeURIComponent(`
 	});
 `)}`;
 
-// Subprocess probes resolve @miubot/* through the package registry, which needs
-// workspace symlinks that this exFAT volume cannot create. Re-enable on NTFS.
-describe.skip("lightweight models entry", () => {
+describe("lightweight models entry", () => {
 	it.each([sourceEntry, "@miubot/provider/models"])(
 		"runs a faux completion without TypeBox, catalogs, or SDKs through %s",
 		(entry) => {
@@ -48,11 +46,15 @@ describe.skip("lightweight models entry", () => {
 				assert.equal(response.stopReason, "stop");
 				assert.deepEqual(response.content, [{ type: "text", text: "OK" }]);
 			`;
-			const result = spawnSync(process.execPath, ["--import", preload, "--input-type=module", "--eval", script], {
+			const result = spawnSync(
+				process.execPath,
+				["--conditions=source", "--import", preload, "--input-type=module", "--eval", script],
+				{
 				cwd: packageRoot,
 				encoding: "utf8",
 				timeout: 10_000,
-			});
+				},
+			);
 			expect(result.error).toBeUndefined();
 			expect(result.status, result.stderr).toBe(0);
 		},

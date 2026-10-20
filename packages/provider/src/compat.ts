@@ -4,10 +4,9 @@
  * the api-registry, generated catalog reads (`getModel`/`getModels`/
  * `getProviders`), per-API lazy stream wrappers, and image generation.
  *
- * Existing apps switch imports from "@miubot/provider" to
- * "@earendil-works/pi-ai/compat" unchanged; new code uses `createModels()`
- * and the provider factories. This module is deleted with the coding-agent
- * ModelManager migration.
+ * Existing code can keep using the package's compatibility API while new code
+ * uses `createModels()` and the provider factories. This module is deleted with
+ * the coding-agent ModelManager migration.
  */
 
 export * from "./api/anthropic-messages.lazy.ts";
@@ -25,7 +24,6 @@ export * from "./image-models.ts";
 export * from "./images.ts";
 export * from "./images-api-registry.ts";
 export * from "./index.ts";
-export * from "./legacy-api-aliases.ts";
 export * from "./providers/images/register-builtins.ts";
 
 import { anthropicMessagesApi } from "./api/anthropic-messages.lazy.ts";

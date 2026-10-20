@@ -1,0 +1,274 @@
+@import "tailwindcss";
+
+/* ── 主题变量:深色(默认 OLED 黑夜) ────────────────────────── */
+:root {
+  color-scheme: dark;
+  --bg-app: #000000;
+  --bg-card: #1f1f1f;
+  --bg-card-hover: #242424;
+  --bg-active: #2b2b2b;
+  --bg-subtle: #141414;
+  --bg-input: #161616;
+  --border: #2c2c2c;
+  --border-strong: #3a3a3a;
+  --text-main: #ffffff;
+  --text-secondary: #cccccc;
+  --text-muted: #888888;
+  --text-dim: #555555;
+  --green: #22c55e;
+  --green-bg: rgba(34, 197, 94, 0.15);
+  --green-border: rgba(34, 197, 94, 0.3);
+  --gray-pill-bg: #2a2a2a;
+  --gray-pill-text: #cccccc;
+  --gray-pill-border: #383838;
+  --primary-btn-bg: #ffffff;
+  --primary-btn-text: #000000;
+  --card-border: rgba(255, 255, 255, 0.04);
+  --card-shadow: none;
+  --hairline: rgba(255, 255, 255, 0.06);
+  --hairline-soft: rgba(255, 255, 255, 0.04);
+  --hairline-faint: rgba(255, 255, 255, 0.03);
+  --scroll-thumb: #2a2a2a;
+  --scroll-thumb-hover: #3a3a3a;
+  --overlay: rgba(0, 0, 0, 0.8);
+}
+
+/* ── 浅色:柔光纸(暖灰纸面 + 米白卡片,拒绝纯白晃眼) ───────── */
+[data-theme="light"] {
+  color-scheme: light;
+  --bg-app: #e8e6e1;
+  --bg-card: #f6f4f0;
+  --bg-card-hover: #efebe5;
+  --bg-active: #dcd8ce;
+  --bg-subtle: #edeae4;
+  --bg-input: #fcfbf8;
+  --border: #dbd7ce;
+  --border-strong: #c3beb0;
+  --text-main: #1d1b18;
+  --text-secondary: #4a463f;
+  --text-muted: #7b766c;
+  --text-dim: #a39d90;
+  --green: #15803d;
+  --green-bg: rgba(21, 128, 61, 0.1);
+  --green-border: rgba(21, 128, 61, 0.3);
+  --gray-pill-bg: #e4e0d7;
+  --gray-pill-text: #5b574f;
+  --gray-pill-border: #cfc9bc;
+  --primary-btn-bg: #1d1b18;
+  --primary-btn-text: #f6f4f0;
+  --card-border: #ddd9cf;
+  --card-shadow: 0 1px 2px rgba(29, 27, 24, 0.06), 0 8px 24px -12px rgba(29, 27, 24, 0.12);
+  --hairline: rgba(29, 27, 24, 0.1);
+  --hairline-soft: rgba(29, 27, 24, 0.07);
+  --hairline-faint: rgba(29, 27, 24, 0.05);
+  --scroll-thumb: #c6c1b4;
+  --scroll-thumb-hover: #aca69a;
+  --overlay: rgba(29, 27, 24, 0.45);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background-color: var(--bg-app);
+  color: var(--text-main);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* 主题切换时的柔和过渡 */
+body, aside, main, .sketch-card, .btn-pill-dark, .btn-primary-white,
+.pill-green, .pill-gray, .sketch-input {
+  transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+::selection {
+  background: var(--green);
+  color: #fff;
+}
+
+/* Custom subtle scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll-thumb-hover);
+}
+
+/* Base Card from screenshot */
+.sketch-card {
+  background-color: var(--bg-card);
+  border-radius: 14px;
+  border: 1px solid var(--card-border);
+  box-shadow: var(--card-shadow);
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.25s ease;
+}
+.sketch-card:hover {
+  background-color: var(--bg-card-hover);
+}
+
+/* Status Pill: green connected / running */
+.pill-green {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background-color: var(--green-bg);
+  color: var(--green);
+  padding: 2px 10px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--green-border);
+}
+
+/* Status Pill: gray disconnected */
+.pill-gray {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background-color: var(--gray-pill-bg);
+  color: var(--gray-pill-text);
+  padding: 2px 10px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--gray-pill-border);
+}
+
+/* Primary Action Pill Button (like "+ 添加 Bot") */
+.btn-primary-white {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background-color: var(--primary-btn-bg);
+  color: var(--primary-btn-text);
+  font-weight: 500;
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: 9999px;
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.15s, background-color 0.25s ease, color 0.25s ease;
+}
+.btn-primary-white:hover {
+  opacity: 0.9;
+}
+
+/* Dark pill button for tabs / subtles */
+.btn-pill-dark {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background-color: var(--bg-subtle);
+  color: var(--text-main);
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 9999px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-pill-dark:hover {
+  background-color: var(--bg-active);
+}
+.btn-pill-dark.active {
+  background-color: var(--bg-active);
+  color: var(--text-main);
+  border-color: var(--border-strong);
+}
+
+/* Input matching theme */
+.sketch-input {
+  background-color: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-main);
+  padding: 8px 12px;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.sketch-input::placeholder {
+  color: var(--text-dim);
+}
+.sketch-input:focus {
+  border-color: var(--border-strong);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   浅色模式:硬编码深色工具类的精确映射
+   使用 [class~="..."] 精确匹配单个 class token,避免误伤
+   hover: 变体(hover:bg-xxx)是独立 token,不会被基类规则命中
+   ═══════════════════════════════════════════════════════════ */
+
+/* —— 基础工具类 —— */
+[data-theme="light"] .bg-black { background-color: var(--bg-app); }
+[data-theme="light"] .text-white { color: var(--text-main); }
+[data-theme="light"] [class~="hover:text-white"]:hover { color: var(--text-main); }
+[data-theme="light"] [class~="border-white"] { border-color: var(--text-main); }
+[data-theme="light"] [class~="bg-white"] { background-color: var(--bg-input); }
+
+/* —— 背景色映射(深 → 柔光纸体系) —— */
+[data-theme="light"] [class~="bg-[#141414]"] { background-color: #edeae4; }
+[data-theme="light"] [class~="bg-[#111111]"] { background-color: #eceae5; }
+[data-theme="light"] [class~="bg-[#151515]"] { background-color: #e4e1da; }
+[data-theme="light"] [class~="bg-[#161616]"] { background-color: #e7e2d5; }
+[data-theme="light"] [class~="bg-[#171717]"] { background-color: #e7e2d5; }
+[data-theme="light"] [class~="bg-[#181818]"] { background-color: #fdfcf9; }
+[data-theme="light"] [class~="bg-[#1a1a1a]"] { background-color: #e7e4dc; }
+[data-theme="light"] [class~="bg-[#242424]"] { background-color: #fdfcf9; }
+[data-theme="light"] [class~="bg-[#262626]"] { background-color: #dbd7cc; }
+[data-theme="light"] [class~="bg-[#282828]"] { background-color: #dbd7cc; }
+
+/* hover 状态背景 */
+[data-theme="light"] [class~="hover:bg-[#151515]"]:hover { background-color: #e4e1da; }
+[data-theme="light"] [class~="hover:bg-[#1a1a1a]"]:hover { background-color: #e7e4dc; }
+[data-theme="light"] [class~="hover:border-[#444444]"]:hover { border-color: #b0aa9b; }
+
+/* —— 边框色映射 —— */
+[data-theme="light"] [class~="border-[#222222]"],
+[data-theme="light"] [class~="border-[#242424]"],
+[data-theme="light"] [class~="border-[#252525]"],
+[data-theme="light"] [class~="border-[#262626]"],
+[data-theme="light"] [class~="border-[#292929]"],
+[data-theme="light"] [class~="border-[#2a2a2a]"],
+[data-theme="light"] [class~="border-[#2b2b2b]"] { border-color: #d8d4c8; }
+[data-theme="light"] [class~="border-[#333333]"] { border-color: #c9c4b5; }
+[data-theme="light"] [class~="border-[#202020]"] { border-color: #d8d4c8; }
+
+/* 半透明白色 hairline → 墨色 hairline */
+[data-theme="light"] [class~="border-[rgba(255,255,255,0.06)]"] { border-color: rgba(29, 27, 24, 0.1); }
+[data-theme="light"] [class~="border-[rgba(255,255,255,0.04)]"] { border-color: rgba(29, 27, 24, 0.07); }
+[data-theme="light"] [class~="border-[rgba(255,255,255,0.03)]"] { border-color: rgba(29, 27, 24, 0.05); }
+[data-theme="light"] [class~="border-t"] { border-top-color: var(--hairline); }
+
+/* —— 文字色映射(深灰阶 → 浅底可读灰阶) —— */
+[data-theme="light"] [class~="text-[#555555]"] { color: #a09c92; }
+[data-theme="light"] [class~="text-[#666666]"] { color: #8d887d; }
+[data-theme="light"] [class~="text-[#777777]"] { color: #78746a; }
+[data-theme="light"] [class~="text-[#888888]"] { color: #6d695f; }
+[data-theme="light"] [class~="text-[#999999]"] { color: #5e5a52; }
+[data-theme="light"] [class~="text-[#aaaaaa]"] { color: #544f47; }
+[data-theme="light"] [class~="text-[#bbbbbb]"] { color: #494540; }
+[data-theme="light"] [class~="text-[#cccccc]"] { color: #37342f; }
+[data-theme="light"] [class~="text-[#dddddd]"] { color: #2b2825; }
+
+/* 绿色文字在浅底加深,保证对比度 */
+[data-theme="light"] [class~="text-[#22c55e]"] { color: #15803d; }
+
+/* select / option 原生下拉跟随主题 */
+[data-theme="light"] select option { background-color: #f6f4f0; color: #1d1b18; }
