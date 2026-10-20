@@ -4,13 +4,11 @@ dist/
 *.log
 .DS_Store
 *.tsbuildinfo
-# packages/*/node_modules/
-packages/*/dist/
-packages/*/dist-chrome/
-packages/*/dist-firefox/
-packages/ai/src/providers/data/
-packages/ai/src/providers/.model-generation-*/
 *.cpuprofile
+
+# Generated model catalogs (regenerate with `npm run generate:model-data`)
+packages/provider/src/providers/data/
+packages/provider/src/providers/.model-generation-*/
 
 # Environment
 .env
@@ -19,33 +17,17 @@ packages/ai/src/providers/.model-generation-*/
 .vscode/
 .zed/
 .idea/
-.claude/
 *.swp
 *.swo
 *~
 
-# Package specific
-.npm/
+# Scratch
+.scratch/
+.tmp/
 coverage/
-.nyc_output/
-.pi_config/
-tui-debug.log
-compaction-results/
-.opencode/
-syntax.jsonl
-out.jsonl
-pi-*.html
-out.html
-packages/coding-agent/binaries/
-packages/env/bin/
-packages/env/daemon/target/
 todo.md
 plans/
-.pi/hf-sessions/
-.pi/hf-sessions-backup/
-.pi/settings.json
-collect.sh
-packages/agent/docs/extensions/pi-server-artifact/index.md
 
-# Local scratch
-.tmp/
+# Local reference material, not part of the repository
+example/
+ui-ux-design/

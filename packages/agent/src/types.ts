@@ -13,7 +13,7 @@ import type {
 	ToolResultMessage,
 	TranscriptContext,
 	Usage,
-} from "@earendil-works/pi-ai";
+} from "@miubot/provider";
 import type { Static, TSchema } from "typebox";
 
 /**
