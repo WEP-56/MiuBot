@@ -17,6 +17,7 @@ import {
   Extensions,
   Logs,
   Settings,
+  Tools,
 } from "./pages/Advanced";
 
 export default function App() {
@@ -48,6 +49,8 @@ export default function App() {
         return <Memory />;
       case "scheduler":
         return <Scheduler />;
+      case "tools":
+        return <Tools />;
       case "extensions":
         return <Extensions />;
       case "logs":

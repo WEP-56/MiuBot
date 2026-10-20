@@ -15,6 +15,7 @@ export type PageId =
   | "skills"
   | "memory"
   | "scheduler"
+  | "tools"
   | "extensions"
   | "logs"
   | "settings";
@@ -40,6 +41,7 @@ const mainItems: Item[] = [
 ];
 
 const advancedSubItems: { id: PageId; label: string }[] = [
+  { id: "tools", label: "Tools" },
   { id: "stickers", label: "表情包" },
   { id: "proactive", label: "主动行为" },
   { id: "mcp", label: "MCP" },

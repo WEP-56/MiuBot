@@ -1,131 +1,27 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Icon } from "../components/Icon";
 
+type Persona = { id: string; name: string; description: string; systemPrompt: string };
+const blank = (): Omit<Persona, "id"> => ({ name: "新人格", description: "", systemPrompt: "" });
+
 export function Personas() {
-  const [selectedPersona, setSelectedPersona] = useState("Miu");
-  const [testInput, setTestInput] = useState("");
-  const [testChat, setTestChat] = useState([
-    { role: "user", text: "今天好累啊，感觉摸不动鱼了…" },
-    { role: "bot", text: "辛苦啦喵~ 先喝杯温水歇歇眼睛，要不要我给你念两句轻松的段子？" },
-  ]);
-
-  const personas = [
-    { name: "Miu", role: "猫娘助手 · 温柔治愈", default: true, tone: "温和、善用波浪号与表情" },
-    { name: "兔猫酱", role: "活泼二次元 · 元气", default: false, tone: "爱开玩笑、高频表情包" },
-    { name: "通用助手", role: "干练中性 · 职业", default: false, tone: "精简、直奔要点" },
-  ];
-
-  const handleSend = () => {
-    if (!testInput.trim()) return;
-    setTestChat([
-      ...testChat,
-      { role: "user", text: testInput },
-      { role: "bot", text: `[${selectedPersona}] 收到啦喵！这行提示词即时生效中。` },
-    ]);
-    setTestInput("");
-  };
-
-  return (
-    <div className="flex-1 h-full overflow-y-auto bg-black text-white p-7 select-none">
-      <div className="max-w-[840px] space-y-4">
-        {/* Header */}
-        <div className="flex items-start justify-between pb-1">
-          <div>
-            <h1 className="text-[20px] font-bold text-white tracking-tight">人格</h1>
-            <p className="text-[13px] text-[#777777] mt-0.5">角色的身份与行为设定，右侧支持即时测试</p>
-          </div>
-          <button className="btn-primary-white">
-            <Icon.Plus size={14} />
-            <span>新建人格</span>
-          </button>
-        </div>
-
-        {/* Two-column layout in sketch style */}
-        <div className="grid grid-cols-2 gap-4">
-          {/* Left Column: Settings */}
-          <div className="space-y-3">
-            {/* Persona Switcher Cards */}
-            <div className="space-y-2">
-              {personas.map((p) => (
-                <div
-                  key={p.name}
-                  onClick={() => setSelectedPersona(p.name)}
-                  className={`sketch-card p-4 cursor-pointer transition-colors ${
-                    selectedPersona === p.name ? "border-white bg-[#262626]" : ""
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2.5">
-                      <Icon.Persona size={16} className="text-white" />
-                      <span className="text-[14px] font-bold text-white">{p.name}</span>
-                    </div>
-                    {p.default ? (
-                      <span className="pill-green !text-[11px]">默认人格</span>
-                    ) : (
-                      <span className="pill-gray !text-[11px]">可选</span>
-                    )}
-                  </div>
-                  <div className="text-[12px] text-[#777777] mt-2">{p.role}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Prompt Editor */}
-            <div className="sketch-card p-5 space-y-3">
-              <div className="text-[14px] font-bold text-white">核心设定 (System Prompt)</div>
-              <textarea
-                className="sketch-input w-full h-[120px] text-[13px] resize-none leading-relaxed"
-                defaultValue="你是 Miu，一只温柔而可靠的猫娘助手。语气平稳治愈，适度使用表情，回复尽量控制在 3 句以内。"
-              />
-              <div className="flex items-center justify-between text-[12px] text-[#777777] pt-1">
-                <span>语言风格：温和、爱开玩笑</span>
-                <span className="text-[#22c55e]">已保存</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Right Column: Instant Test Chat */}
-          <div className="sketch-card p-5 flex flex-col justify-between h-[420px]">
-            <div>
-              <div className="flex items-center justify-between pb-3 border-b border-[rgba(255,255,255,0.06)]">
-                <span className="text-[14px] font-bold text-white">即时测试面板</span>
-                <span className="text-[12px] text-[#888888]">测试人格：{selectedPersona}</span>
-              </div>
-
-              <div className="space-y-3 pt-3 overflow-y-auto max-h-[280px] pr-1">
-                {testChat.map((msg, i) => (
-                  <div
-                    key={i}
-                    className={`p-3 rounded-xl text-[13px] ${
-                      msg.role === "user"
-                        ? "bg-[#161616] border border-[#2b2b2b] text-[#dddddd] ml-6"
-                        : "bg-[#242424] text-white mr-6"
-                    }`}
-                  >
-                    <div className="text-[10.5px] text-[#666666] mb-1">
-                      {msg.role === "user" ? "测试者" : selectedPersona}
-                    </div>
-                    <div>{msg.text}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="flex gap-2 pt-3 border-t border-[rgba(255,255,255,0.06)]">
-              <input
-                className="sketch-input flex-1"
-                placeholder={`向 ${selectedPersona} 发送测试消息...`}
-                value={testInput}
-                onChange={(e) => setTestInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSend()}
-              />
-              <button onClick={handleSend} className="btn-primary-white">
-                <Icon.Send size={13} />
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+	const [personas, setPersonas] = useState<Persona[]>([]); const [activeId, setActiveId] = useState("");
+	const [editing, setEditing] = useState<Persona | Omit<Persona, "id"> | null>(null); const [notice, setNotice] = useState(""); const [saving, setSaving] = useState(false);
+	const load = async () => { const response = await fetch("/api/personas"); const data = await response.json() as { personas: Persona[]; activePersonaId: string }; setPersonas(data.personas); setActiveId(data.activePersonaId); };
+	useEffect(() => { void load().catch(() => setNotice("无法连接 Miubot Server")); }, []);
+	const save = async () => {
+		if (!editing || !editing.name.trim() || !editing.systemPrompt.trim()) { setNotice("请填写人格名称和系统提示词"); return; }
+		setSaving(true); setNotice("");
+		try { const isExisting = "id" in editing; const response = await fetch(isExisting ? `/api/personas/${encodeURIComponent(editing.id)}` : "/api/personas", { method: isExisting ? "PUT" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(editing) }); const data = await response.json() as { personas?: Persona[]; activePersonaId?: string; message?: string }; if (!response.ok) throw new Error(data.message ?? "保存失败"); setPersonas(data.personas ?? []); setActiveId(data.activePersonaId ?? activeId); setEditing(null); setNotice("人格已保存；新会话会使用当前人格，既有会话保持原样"); }
+		catch (error) { setNotice(error instanceof Error ? error.message : String(error)); } finally { setSaving(false); }
+	};
+	const activate = async (id: string) => { try { const response = await fetch("/api/personas/active", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ id }) }); const data = await response.json() as { activePersonaId: string; message?: string }; if (!response.ok) throw new Error(data.message ?? "切换失败"); setActiveId(data.activePersonaId); setNotice("当前人格已切换；已有会话不会改变"); } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); } };
+	const remove = async (persona: Persona) => { if (!window.confirm(`删除人格“${persona.name}”？已有会话仍保留已保存的人格设定。`)) return; try { const response = await fetch(`/api/personas/${encodeURIComponent(persona.id)}`, { method: "DELETE" }); const data = await response.json() as { personas?: Persona[]; activePersonaId?: string; message?: string }; if (!response.ok) throw new Error(data.message ?? "删除失败"); setPersonas(data.personas ?? []); setActiveId(data.activePersonaId ?? ""); setNotice("人格已删除"); } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); } };
+	return <section className="flex-1 h-full overflow-y-auto p-7" style={{ background: "var(--bg-app)", color: "var(--text-main)" }}><div className="max-w-[900px] space-y-5">
+		<header className="flex items-start justify-between gap-4"><div><h1 className="text-xl font-semibold">人格</h1><p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>选择默认人格；切换只对新会话生效</p></div><button className="btn-primary-white" onClick={() => setEditing(blank())}><Icon.Plus size={14}/>新建人格</button></header>
+		{notice && <p className="text-sm" role="status">{notice}</p>}
+		<div className="space-y-3">{personas.map((persona) => <article className="sketch-card flex flex-wrap items-start justify-between gap-4 p-4" key={persona.id}><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><Icon.Persona/><h2 className="font-semibold">{persona.name}</h2>{activeId === persona.id && <span className="pill-green">当前人格</span>}</div><p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>{persona.description || "未填写简介"}</p><p className="mt-3 line-clamp-3 whitespace-pre-wrap text-sm" style={{ color: "var(--text-main)" }}>{persona.systemPrompt}</p></div><div className="flex gap-2"><button className="btn-pill-dark" disabled={activeId === persona.id} onClick={() => void activate(persona.id)}>设为当前</button><button className="btn-pill-dark" onClick={() => setEditing(persona)}>编辑</button><button className="btn-pill-dark text-red-400" disabled={personas.length < 2} onClick={() => void remove(persona)}>删除</button></div></article>)}</div>
+	</div>
+	{editing && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setEditing(null)}><div className="sketch-card w-full max-w-2xl space-y-4 p-5" onClick={(event) => event.stopPropagation()}><div className="flex items-center justify-between"><h2 className="font-semibold">{"id" in editing ? "编辑人格" : "新建人格"}</h2><button title="关闭" onClick={() => setEditing(null)}><Icon.X/></button></div><label className="block text-sm">名称<input className="sketch-input mt-1 w-full" value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })}/></label><label className="block text-sm">简介<input className="sketch-input mt-1 w-full" value={editing.description} onChange={(event) => setEditing({ ...editing, description: event.target.value })}/></label><label className="block text-sm">系统提示词<textarea className="sketch-input mt-1 min-h-48 w-full resize-y" value={editing.systemPrompt} onChange={(event) => setEditing({ ...editing, systemPrompt: event.target.value })}/></label><div className="flex justify-end gap-2"><button className="btn-pill-dark" onClick={() => setEditing(null)}>取消</button><button className="btn-primary-white" disabled={saving} onClick={() => void save()}>{saving ? "保存中…" : "保存"}</button></div></div></div>}
+	</section>;
 }
