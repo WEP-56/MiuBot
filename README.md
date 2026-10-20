@@ -8,6 +8,16 @@
 - 移植来源与模块映射：`docs/10-技术架构/04-Pi移植记录.md`
 - 开发约定：`AGENTS.md`
 
+## 开始
+
+### 本地使用
+
+### 部署到服务器
+
+
+## 常见问题与解决方案
+
+
 ## 开发
 
 ```bash
@@ -17,6 +27,7 @@ npm run check                 # 类型检查
 npm test                      # 单元测试
 ```
 
+
 ## License
 
-Miubot 采用 MIT。Pi 的 MIT 许可与版权声明保留在 `LICENSE-Pi`。
+Miubot 采用 MIT。Pi 的 MIT 许可与版权声明保留在 [LICENSE-Pi](docs/LICENSE-Pi)
