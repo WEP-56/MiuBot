@@ -11,7 +11,7 @@ import { collectInboundStickers } from "./sticker-collection.ts";
 import { tagStickerImage } from "./sticker-tagger.ts";
 import { StickerStore } from "./stickers.ts";
 import { createAgentHost, type PeerConfig, type RuntimeMessage, type RuntimeSession } from "./agent-host.ts";
-import { createChatCompletion, createDefaultConfig, evaluateProactiveGate, type AppConfig, type ChatMessage, type ModelConfig, type PersonaConfig, type ProviderConfig, type QqBotConfig, type WebSearchProvider } from "./runtime.ts";
+import { createChatCompletion, createDefaultConfig, evaluateProactiveGate, type AppConfig, type ChatMessage, type ImageProviderConfig, type ModelConfig, type PersonaConfig, type ProviderConfig, type QqBotConfig, type WebSearchProvider } from "./runtime.ts";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const dataDir = join(root, ".miubot");
@@ -86,6 +86,7 @@ async function loadConfig(): Promise<void> {
 					apiKeys: { ...defaults.tools.webSearch.apiKeys, ...savedTools?.webSearch?.apiKeys },
 				},
 			},
+			imageProviders: Array.isArray(current.imageProviders) ? current.imageProviders : defaults.imageProviders,
 			proactiveGate: { ...defaults.proactiveGate, ...current.proactiveGate },
 			mcpServers: Array.isArray(current.mcpServers) ? current.mcpServers : defaults.mcpServers,
 		};
@@ -112,12 +113,12 @@ async function loadRuntimeData(): Promise<void> {
 	} catch { sessions = []; }
 	try {
 		const stored = JSON.parse(await readFile(peerConfigsPath, "utf8")) as Array<Partial<PeerConfig> & Pick<PeerConfig, "botId" | "scope" | "peerId" | "personaId" | "providerId" | "modelId">>;
-		peerConfigs = Array.isArray(stored) ? stored.map((item) => ({ ...item, name: item.name || sessions.find((session) => session.botId === item.botId && session.scope === item.scope && session.peerId === item.peerId)?.peerName || `${item.scope === "group" ? "群" : "用户"} ${item.peerId}`, useTools: item.useTools ?? true, features: { activeReply: false, stickers: false, imageGeneration: false, tts: false, ...item.features } })) : [];
+		peerConfigs = Array.isArray(stored) ? stored.map((item) => ({ ...item, name: item.name || sessions.find((session) => session.botId === item.botId && session.scope === item.scope && session.peerId === item.peerId)?.peerName || `${item.scope === "group" ? "群" : "用户"} ${item.peerId}`, useTools: item.useTools ?? true, features: { activeReply: typeof item.features === "object" && item.features !== null && (item.features as { activeReply?: unknown }).activeReply === true } })) : [];
 	} catch { peerConfigs = []; }
 	for (const session of sessions) {
 		if (!peerConfigs.some((item) => item.botId === session.botId && item.scope === session.scope && item.peerId === session.peerId)) {
 			const defaults = getDefaultModel();
-			peerConfigs.push({ botId: session.botId, scope: session.scope, peerId: session.peerId, name: session.peerName, personaId: config.activePersonaId || config.personas[0]?.id || "", providerId: defaults?.provider.id ?? "", modelId: defaults?.model.id ?? "", useTools: true, features: { activeReply: false, stickers: false, imageGeneration: false, tts: false } });
+			peerConfigs.push({ botId: session.botId, scope: session.scope, peerId: session.peerId, name: session.peerName, personaId: config.activePersonaId || config.personas[0]?.id || "", providerId: defaults?.provider.id ?? "", modelId: defaults?.model.id ?? "", useTools: true, features: { activeReply: false } });
 		}
 	}
 	await savePeerConfigs();
@@ -164,7 +165,7 @@ function getPeerConfig(scope: PeerConfig["scope"], peerId: string, botId: string
 
 function createPeerConfig(scope: PeerConfig["scope"], peerId: string, botId: string, name: string): PeerConfig {
 	const defaults = getDefaultModel();
-	return { botId, scope, peerId, name, personaId: config.activePersonaId || config.personas[0]?.id || "", providerId: defaults?.provider.id ?? "", modelId: defaults?.model.id ?? "", useTools: true, features: { activeReply: false, stickers: false, imageGeneration: false, tts: false } };
+	return { botId, scope, peerId, name, personaId: config.activePersonaId || config.personas[0]?.id || "", providerId: defaults?.provider.id ?? "", modelId: defaults?.model.id ?? "", useTools: true, features: { activeReply: false } };
 }
 
 function registerPeer(scope: PeerConfig["scope"], peerId: string, botId: string, name: string): PeerConfig {
@@ -261,9 +262,10 @@ function createSession(scope: RuntimeSession["scope"], peerId: string, peerName:
 }
 
 const nativeToolNames = ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"] as const;
-const toolNames = [...nativeToolNames, "web_search"];
+const toolNames = [...nativeToolNames, "web_search", "image_gen"];
 const toolCatalog = [
 	{ name: "web_search", label: "网页搜索", description: "使用 Tavily、Brave、Exa 或 Serper 搜索公开网页。", configurable: true },
+	{ name: "image_gen", label: "图像生成", description: "按文字提示生成图片并发送到当前 QQ 对话。", configurable: true },
 	{ name: "read", label: "读取文件", description: "读取工作区文件内容。" },
 	{ name: "bash", label: "Bash", description: "在服务器工作目录执行 Bash 命令。" },
 	{ name: "powershell", label: "PowerShell", description: "在服务器工作目录执行 PowerShell 命令。" },
@@ -416,7 +418,7 @@ async function processQQMessage(bot: QQBot, botConfig: QqBotConfig, message: QQB
 	await savePeerConfigs();
 	conversationActivityVersion++;
 	interruptStickerTagging();
-	const collectProbability = config.tools.stickersEnabled && peerConfig?.features.stickers === true ? config.tools.stickerAutoCollectProbability : 0;
+	const collectProbability = config.tools.stickersEnabled && peerConfig?.useTools !== false ? config.tools.stickerAutoCollectProbability : 0;
 	if (collectProbability > 0 && message.attachments?.length) {
 		void collectInboundStickers(message.attachments.map((attachment) => ({ kind: attachment.content_type.toLowerCase().startsWith("image/") ? "image" as const : "file" as const, url: attachment.url, mimeType: attachment.content_type, ...(attachment.filename ? { fileName: attachment.filename } : {}) })), collectProbability, stickerStore, { download: downloadImage }).then((result) => {
 			if (result.imported || result.duplicates || result.failed) log("INFO", `表情包自动采集：新增 ${result.imported}，重复 ${result.duplicates}，失败 ${result.failed} (${peerId})`);
@@ -499,10 +501,11 @@ async function binaryBody(req: IncomingMessage, maxBytes: number): Promise<Uint8
 	return new Uint8Array(Buffer.concat(chunks));
 }
 
-function publicConfig(): { qqBots: Array<Omit<QqBotConfig, "appSecret"> & { credentialsConfigured: boolean }>; providers: Array<Omit<ProviderConfig, "apiKey"> & { apiKeyConfigured: boolean }> } {
+function publicConfig(): { qqBots: Array<Omit<QqBotConfig, "appSecret"> & { credentialsConfigured: boolean }>; providers: Array<Omit<ProviderConfig, "apiKey"> & { apiKeyConfigured: boolean }>; imageProviders: Array<Omit<ImageProviderConfig, "apiKey"> & { apiKeyConfigured: boolean }> } {
 	const qqBots = config.qqBots.map(({ appSecret, ...bot }) => ({ ...bot, credentialsConfigured: Boolean(appSecret) }));
 	const providers = config.providers.map(({ apiKey, ...provider }) => ({ ...provider, apiKeyConfigured: Boolean(apiKey) }));
-	return { qqBots, providers };
+	const imageProviders = config.imageProviders.map(({ apiKey, ...provider }) => ({ ...provider, apiKeyConfigured: Boolean(apiKey) }));
+	return { qqBots, providers, imageProviders };
 }
 
 async function testQQ(appId: string, appSecret: string): Promise<{ ok: boolean; message: string }> {
@@ -601,12 +604,14 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
 		if (url.pathname === "/api/config" && req.method === "PUT") {
 			const next = await body(req);
 			const providers = Array.isArray(next.providers) ? next.providers as Array<ProviderConfig & { apiKeyConfigured?: boolean }> : config.providers as Array<ProviderConfig & { apiKeyConfigured?: boolean }>;
+			const imageProviders = Array.isArray(next.imageProviders) ? next.imageProviders as Array<ImageProviderConfig & { apiKeyConfigured?: boolean }> : config.imageProviders as Array<ImageProviderConfig & { apiKeyConfigured?: boolean }>;
 			config = {
 				...config,
 				providers: providers.map(({ apiKeyConfigured: _configured, ...provider }) => ({
 					...provider,
 					apiKey: provider.apiKey || config.providers.find((existing) => existing.id === provider.id)?.apiKey || "",
 				})),
+				imageProviders: imageProviders.map(({ apiKeyConfigured: _configured, ...provider }) => ({ ...provider, apiKey: provider.apiKey || config.imageProviders.find((existing) => existing.id === provider.id)?.apiKey || "" })),
 			};
 			await saveConfig();
 			return json(res, 200, publicConfig());
@@ -855,7 +860,7 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
 			const provider = config.providers.find((item) => item.id === providerId && item.enabled && item.apiKey);
 			if (!persona || !provider || !provider.models.some((item) => item.id === modelId)) return json(res, 400, { ok: false, message: "请选择有效的人格、已启用提供商和模型" });
 			const rawFeatures = typeof input.features === "object" && input.features !== null ? input.features as Record<string, unknown> : {};
-			const next: PeerConfig = { botId, scope, peerId, name: String(input.name ?? current?.name ?? `${scope === "group" ? "群" : "用户"} ${peerId}`).trim() || `${scope === "group" ? "群" : "用户"} ${peerId}`, personaId, providerId, modelId, useTools: input.useTools !== false, features: { activeReply: rawFeatures.activeReply === true, stickers: rawFeatures.stickers === true, imageGeneration: rawFeatures.imageGeneration === true, tts: rawFeatures.tts === true } };
+			const next: PeerConfig = { botId, scope, peerId, name: String(input.name ?? current?.name ?? `${scope === "group" ? "群" : "用户"} ${peerId}`).trim() || `${scope === "group" ? "群" : "用户"} ${peerId}`, personaId, providerId, modelId, useTools: input.useTools !== false, features: { activeReply: rawFeatures.activeReply === true } };
 			const index = peerConfigs.findIndex((item) => item.scope === scope && item.peerId === peerId && item.botId === botId);
 			if (index >= 0) peerConfigs[index] = next; else peerConfigs.push(next);
 			await savePeerConfigs();

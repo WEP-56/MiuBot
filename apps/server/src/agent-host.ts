@@ -8,11 +8,12 @@ import { SessionManager } from "@miubot/session/session-manager";
 import type { AppConfig, ModelConfig, PersonaConfig, ProviderConfig } from "./runtime.ts";
 import { extensionForMime, type Sticker, type StickerStore } from "./stickers.ts";
 import type { QQBot, QQBotInboundMessage } from "@tencent-connect/qqbot-nodejs";
-import { sendQQMedia } from "./media.ts";
+import { downloadImage, sendQQMedia } from "./media.ts";
+import { generateOpenAIImage } from "@miubot/provider";
 
 export type RuntimeMessage = { role: "user" | "assistant"; content: string; sender?: string; timestamp: string };
 export type RuntimeSession = { id: string; scope: "group" | "c2c"; peerId: string; peerName: string; botId: string; title: string; personaId: string; personaName: string; personaPrompt: string; providerId: string; modelId: string; summary: string; compactedThrough: number; messages: RuntimeMessage[]; createdAt: string; updatedAt: string; active: boolean };
-export type PeerConfig = { botId: string; scope: "group" | "c2c"; peerId: string; name: string; personaId: string; providerId: string; modelId: string; useTools: boolean; features: { activeReply: boolean; stickers: boolean; imageGeneration: boolean; tts: boolean } };
+export type PeerConfig = { botId: string; scope: "group" | "c2c"; peerId: string; name: string; personaId: string; providerId: string; modelId: string; useTools: boolean; features: { activeReply: boolean } };
 
 type AgentHostDependencies = {
 	dataDir: string;
@@ -63,13 +64,13 @@ export function createAgentHost(deps: AgentHostDependencies) {
 
 	function enabledToolNames(runtimeSession: RuntimeSession): string[] {
 		const current = config();
-		const nativeToolNames = ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls", "web_search"];
+		const nativeToolNames = ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls", "web_search", "image_gen"];
 		const peer = deps.getPeerConfig(runtimeSession.scope, runtimeSession.peerId, runtimeSession.botId);
 		if (peer?.useTools === false) return [];
 		return [
 			...current.tools.enabled.filter((name) => nativeToolNames.includes(name)),
 			...(current.tools.skillsEnabled ? ["load_skill"] : []),
-			...(current.tools.stickersEnabled && peer?.features.stickers ? ["search_stickers", "send_sticker"] : []),
+			...(current.tools.stickersEnabled ? ["search_stickers", "send_sticker"] : []),
 			...deps.mcpRuntime.getEnabledToolDefinitions().map((tool) => tool.name),
 		];
 	}
@@ -104,7 +105,7 @@ export function createAgentHost(deps: AgentHostDependencies) {
 			...(current.tools.skillsEnabled ? { skills: { cwd: deps.dataDir, agentDir: deps.agentDir } } : {}),
 			...(current.tools.stickersEnabled ? { stickers: { store: deps.stickerStore, canUse: () => {
 				const latestPeer = deps.getPeerConfig(runtimeSession.scope, runtimeSession.peerId, runtimeSession.botId);
-				return config().tools.stickersEnabled && latestPeer?.useTools !== false && latestPeer?.features.stickers === true;
+				return config().tools.stickersEnabled && latestPeer?.useTools !== false;
 			}, send: async (sticker: Sticker) => {
 				const context = deps.getStickerContext(runtimeSession.id);
 				if (!context) throw new Error("当前没有可用的 QQ 回复目标");
@@ -113,6 +114,16 @@ export function createAgentHost(deps: AgentHostDependencies) {
 				const extension = extensionForMime(sticker.mimeType);
 				await sendQQMedia(context.bot, context.target, { kind: "image", buffer: image, fileName: `${sticker.id}${extension}` });
 			} } } : {}),
+			imageGen: { generate: async ({ prompt, size, quality, signal }) => {
+				const imageProvider = config().imageProviders.find((item) => item.enabled && item.apiKey);
+				if (!imageProvider) throw new Error("请先在提供商页面配置并启用图像生成提供商");
+				const context = deps.getStickerContext(runtimeSession.id);
+				if (!context) throw new Error("当前没有可用的 QQ 回复目标");
+				const image = await generateOpenAIImage({ apiKey: imageProvider.apiKey ?? "", baseUrl: imageProvider.baseUrl, model: imageProvider.model, prompt, size, quality, signal });
+				const downloaded = "url" in image ? await downloadImage(image.url) : { bytes: Buffer.from(image.data, "base64"), mimeType: image.mimeType };
+				const extension = downloaded.mimeType === "image/jpeg" ? ".jpg" : downloaded.mimeType === "image/webp" ? ".webp" : ".png";
+				await sendQQMedia(context.bot, context.target, { kind: "image", buffer: Buffer.from(downloaded.bytes), fileName: `generated-${Date.now()}${extension}` });
+			} },
 			mcp: deps.mcpRuntime,
 		});
 		const resourceLoader = new DefaultResourceLoader({ cwd: deps.dataDir, agentDir: deps.agentDir, skillsOverride: (base) => ({ ...base, skills: config().tools.skillsEnabled ? base.skills : [] }), extensionFactories: [{ name: "miubot-qq-scene", factory: (pi) => {

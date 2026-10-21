@@ -5,18 +5,20 @@ export type ModelConfig = {
 	compressionThreshold: number; supportsThinking: boolean; supportsVision: boolean; supportsTools: boolean;
 };
 export type ProviderConfig = { id: string; name: string; api: string; apiKey?: string; baseUrl?: string; models: ModelConfig[]; enabled: boolean; ttsModel?: string; imageModel?: string };
+export type ImageProviderConfig = { id: string; name: string; api: "openai-images"; apiKey?: string; baseUrl?: string; model: string; enabled: boolean };
 export type QqBotConfig = { id: string; nickname: string; avatarUrl: string; appId: string; appSecret: string; mode: "qr" | "credentials"; enabled: boolean };
 export type PersonaConfig = { id: string; name: string; description: string; systemPrompt: string };
 export type WebSearchProvider = "tavily" | "brave" | "exa" | "serper";
 export type ToolSettings = { enabled: string[]; mcpEnabled: boolean; skillsEnabled: boolean; stickersEnabled: boolean; stickerAutoCollectProbability: number; stickerTaggerProviderId: string; stickerTaggerModelId: string; webSearch: { provider: WebSearchProvider; apiKeys: Record<WebSearchProvider, string> } };
 export type ProactiveGateSettings = { enabled: boolean; mode: "smart" | "probability"; probabilityPercent: number; dailyMessageLimit: number; quietStart: string; quietEnd: string; notifyOnLimit: boolean; aggregationSeconds: number; cooldownMinutes: number; judgeProviderId: string; judgeModelId: string };
-export type AppConfig = { qqBots: QqBotConfig[]; providers: ProviderConfig[]; personas: PersonaConfig[]; activePersonaId: string; tools: ToolSettings; mcpServers: McpServerConfig[]; proactiveGate: ProactiveGateSettings };
+export type AppConfig = { qqBots: QqBotConfig[]; providers: ProviderConfig[]; imageProviders: ImageProviderConfig[]; personas: PersonaConfig[]; activePersonaId: string; tools: ToolSettings; mcpServers: McpServerConfig[]; proactiveGate: ProactiveGateSettings };
 export type ChatMessage = { role: "user" | "assistant" | "system"; content: string };
 
 export function createDefaultConfig(): AppConfig {
 	return {
 		qqBots: [],
 		providers: [{ id: "openai", name: "OpenAI 兼容", api: "openai-completions", apiKey: "", baseUrl: "https://api.openai.com/v1", enabled: true, ttsModel: "", imageModel: "", models: [{ id: "gpt-4o-mini", name: "GPT-4o mini", api: "openai-completions", maxOutput: 4096, maxContext: 128000, compressionThreshold: 100000, supportsThinking: false, supportsVision: true, supportsTools: true }] }],
+		imageProviders: [{ id: "openai-images", name: "OpenAI 图像生成", api: "openai-images", apiKey: "", baseUrl: "https://api.openai.com/v1", model: "gpt-image-1", enabled: true }],
 		personas: [{ id: "default", name: "Miu", description: "温柔可靠的猫娘助手", systemPrompt: "你是 Miu，一只温柔、可靠的猫娘助手。用自然、友善的中文回复，适度使用语气词，不要声称自己执行了未执行的操作。" }],
 		activePersonaId: "default",
 		tools: { enabled: ["web_search"], mcpEnabled: false, skillsEnabled: false, stickersEnabled: false, stickerAutoCollectProbability: 0, stickerTaggerProviderId: "", stickerTaggerModelId: "", webSearch: { provider: "tavily", apiKeys: { tavily: "", brave: "", exa: "", serper: "" } } },

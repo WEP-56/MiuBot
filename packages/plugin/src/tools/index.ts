@@ -81,6 +81,7 @@ export {
 export { createWebSearchTool, type WebSearchConfig, type WebSearchProvider } from "./web-search.ts";
 export { createLoadSkillTool, installSkillFromGitHub, installSkillFromZip, listInstalledSkills, removeInstalledSkill, type InstalledSkill } from "./skills/runtime.ts";
 export { createStickerTools, type StickerToolItem, type StickerToolStore } from "./stickers/tools.ts";
+export { createImageGenTool, type ImageGenerationRequest } from "./image-gen.ts";
 export { McpRuntime, type McpServerConfig, type McpServerStatus } from "./mcp/runtime.ts";
 
 import type { AgentTool } from "@miubot/agent";
@@ -96,6 +97,7 @@ import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } fro
 import { createWebSearchTool, type WebSearchConfig } from "./web-search.ts";
 import { createLoadSkillTool } from "./skills/runtime.ts";
 import { createStickerTools, type StickerToolItem, type StickerToolStore } from "./stickers/tools.ts";
+import { createImageGenTool, type ImageGenerationRequest } from "./image-gen.ts";
 import { McpRuntime } from "./mcp/runtime.ts";
 
 export type Tool = AgentTool<any>;
@@ -127,6 +129,7 @@ export interface BuiltinToolsOptions<T extends StickerToolItem = StickerToolItem
 	webSearch: () => WebSearchConfig;
 	skills?: { cwd: string; agentDir: string };
 	stickers?: { store: StickerToolStore<T>; canUse: () => boolean; send: (sticker: T) => Promise<void> };
+	imageGen?: { generate: (request: ImageGenerationRequest) => Promise<void> };
 	mcp?: McpRuntime;
 }
 
@@ -135,6 +138,7 @@ export function createBuiltinTools<T extends StickerToolItem>(options: BuiltinTo
 		createWebSearchTool(options.webSearch),
 		...(options.skills ? [createLoadSkillTool(options.skills.cwd, options.skills.agentDir)] : []),
 		...(options.stickers ? createStickerTools(options.stickers.store, options.stickers.canUse, options.stickers.send) : []),
+		...(options.imageGen ? [createImageGenTool(options.imageGen.generate)] : []),
 		...(options.mcp?.getEnabledToolDefinitions() ?? []),
 	];
 }
