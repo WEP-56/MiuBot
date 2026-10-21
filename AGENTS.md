@@ -11,7 +11,7 @@ packages/
   provider/        Provider Core：多协议模型调用（源自 Pi packages/ai）
   agent/           Agent Core：Agent Loop、工具执行、流式状态（源自 Pi packages/agent）
   context/         上下文构建：消息转换、系统提示、压缩、技能、提示模板
-  plugin/          Plugin Core：扩展宿主、工具、tool-search
+  plugin/          Plugin Core：扩展宿主、内置 Tools（统一在 src/tools）、tool-search
   session/         会话运行时：AgentSession、会话存储、设置、模型运行时、鉴权
   mcp/             MCP 客户端
   telemetry/       内部遥测抽象（provider 依赖）
@@ -23,7 +23,7 @@ packages/
 ## 快速入口
 
 - 项目概览与开发命令：`README.md`
-- 服务端说明与启动：`apps/server/README.md`；入口是 `apps/server/src/index.ts`，运行时配置/模型调用在 `apps/server/src/runtime.ts`
+- 服务端说明与启动：`apps/server/README.md`；`apps/server/src/index.ts` 是进程入口，`apps/server/src/runtime.ts` 是运行时组合根，负责初始化与连接各模块。业务能力、模型路由和工具实现由对应 Package 持有，Server 只负责装配与调用。
 - Web 工作台说明与启动：`apps/web/README.md`；React 入口是 `apps/web/src/App.tsx`
 - Pi 迁移边界：`docs/10-技术架构/04-Pi移植记录.md`
 - 当前产品进度：`docs/00-产品与全局/03-路线图.md`
@@ -34,6 +34,45 @@ packages/
 基础闭环已经接通：QQ 官方 Bot（扫码或 AppID/AppSecret）、提供商/模型、人格、群/个人会话、Agent Loop、工具开关、调试台、运行日志和群聊智能插话。MCP 管理、长期记忆、表情包、定时任务、插件安装、完整 Trace、正式数据库持久化等能力以路线图为准，看到 Web 占位页时不要默认其后端已经实现。
 
 接手任务时先看 `git status --short`，再按任务进入对应入口文件；只有需要追踪跨层行为时，才扩展到相关 package 和架构文档。
+
+## Tools、Plugin 与宿主边界
+
+- 所有可由模型调用的内置 Tool 定义统一放在 `packages/plugin/src/tools/`，包括 schema、描述、promptSnippet 和执行逻辑；不要在 `apps/server` 定义或实现 Tool。
+- `apps/server` 是 Plugin/Agent 的宿主与组合根：负责读取配置、执行全局/对象级授权，并通过参数、接口或回调向 Tool 注入凭据、存储和平台发送能力。Tool 包不得导入 `apps/server`。
+- MCP 协议客户端属于 `packages/mcp`；与 Pi Extension ToolDefinition 的桥接、连接生命周期及 Agent 工具注册属于 `packages/plugin/src/tools/mcp`。服务端只维护用户配置 API 和是否启用的宿主策略。
+- 平台 I/O、业务数据存储、后台任务与管理 API 不因被某个 Tool 使用就自动归入 `plugin`；它们由所属 package 实现，再由宿主注入 Tool。保持模型可调用入口和底层服务的边界清晰。
+- 扩展生命周期、Hook、Tool 注册与权限能力归 `packages/plugin`。Pi 扩展中的 TUI 能力不得直接作为 Miubot WebUI API；新增 WebUI 扩展点须定义宿主可控的 Web 契约和权限。
+- 新增内置 Tool 时，同时更新 `packages/plugin/src/tools/index.ts` 导出和相应测试；服务端只负责装配与授权，不复制 Tool schema 或描述。
+
+## 架构边界与功能归属
+
+新增功能前，先根据职责确定所属模块，不要仅根据现有调用链或文件位置选择实现位置。
+
+- apps/server：进程启动、HTTP/WS、平台接入装配、依赖注入。
+- packages/plugin：Agent Tools、插件注册、扩展生命周期、工具执行入口。
+- packages/session：会话生命周期、Agent 实例管理、模型选择与运行时协调。
+- packages/context：消息转换、上下文组装、压缩、提示词与技能内容。
+- packages/provider：模型 API 协议实现，不处理具体会话业务。
+- packages/agent：通用 Agent Loop，不引入 Miubot 业务逻辑。
+
+### 必须遵守
+
+1. Server 是组合根，不是业务逻辑的默认存放位置。
+2. 新增内置 Agent Tool 必须通过 Plugin Core 注册，不得在 Server 实现或复制 Tool 定义。
+3. Tool 使用的底层服务不必属于 Plugin，应根据业务职责归属并通过接口注入。
+4. 工具执行必须经过统一权限检查，不能因调用来源不同而绕过授权。
+5. 不要扩大 Plugin 与 Session 之间的双向类型依赖；新增交互优先使用最小接口契约。
+6. 修改跨模块功能时，先检查现有公开接口，避免直接访问其他模块的内部实现。
+7. 发现现有代码违反架构约束时，不要继续模仿；在任务范围内修正，超出范围则报告。
+8. 新增功能时同步删除本次修改造成的废弃注册和重复实现，避免保留两套路径。
+
+### 验证
+
+完成修改后：
+- 运行与改动相关的类型检查和测试。
+- 检查是否新增跨层依赖或循环依赖。
+- 检查是否产生重复注册、废弃代码路径。
+- 涉及前端交互或真实平台行为时，说明需要人工验证的步骤。
 
 ## 命令
 
@@ -53,6 +92,8 @@ packages/
 - 最小改动：不顺手重构、不统一风格、不动无关文件。
 - 删除看似有意的功能或代码前先问。
 - 不为兼容旧行为保留冗余分支，除非用户要求。
+
+
 
 ## 合作与开发规划（为了效率）
 

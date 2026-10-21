@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { strToU8, zipSync } from "fflate";
-import { createLoadSkillTool, installSkillFromGitHub, installSkillFromZip, listInstalledSkills, removeInstalledSkill } from "../src/skill-runtime.ts";
+import { createLoadSkillTool, installSkillFromGitHub, installSkillFromZip, listInstalledSkills, removeInstalledSkill } from "../src/tools/skills/runtime.ts";
 
 describe("load_skill tool", () => {
 	it("loads a discovered skill by name and rejects unknown skills", async () => {
@@ -16,12 +16,12 @@ describe("load_skill tool", () => {
 
 		try {
 			const tool = createLoadSkillTool(cwd, agentDir);
-			const result = await tool.execute("call-1", { name: "release-notes" }, new AbortController().signal);
+			const result = await tool.execute("call-1", { name: "release-notes" }, undefined, undefined, {} as Parameters<typeof tool.execute>[4]);
 			expect(result.isError).not.toBe(true);
 			expect(result.content[0]).toMatchObject({ type: "text" });
 			expect(result.content[0]?.type === "text" && result.content[0].text).toContain("Use concise headings.");
 
-			const missing = await tool.execute("call-2", { name: "missing" }, new AbortController().signal);
+			const missing = await tool.execute("call-2", { name: "missing" }, undefined, undefined, {} as Parameters<typeof tool.execute>[4]);
 			expect(missing.isError).toBe(true);
 			expect(missing.content[0]?.type === "text" && missing.content[0].text).toContain("Skill not found");
 		} finally {

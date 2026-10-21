@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import type { ToolDefinition } from "@miubot/plugin/extensions/index";
+import type { ToolDefinition } from "../../extensions/index.ts";
 import { McpClient, StdioTransport, StreamableHttpTransport, toLlmContent, type Tool } from "@miubot/mcp";
 
 export interface McpServerConfig {

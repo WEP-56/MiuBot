@@ -1,3 +1,5 @@
+import type { McpServerConfig } from "@miubot/plugin/tools/mcp/runtime";
+
 export type ModelConfig = {
 	id: string; name: string; api: string; baseUrl?: string; maxOutput: number; maxContext: number;
 	compressionThreshold: number; supportsThinking: boolean; supportsVision: boolean; supportsTools: boolean;
@@ -6,9 +8,8 @@ export type ProviderConfig = { id: string; name: string; api: string; apiKey?: s
 export type QqBotConfig = { id: string; nickname: string; avatarUrl: string; appId: string; appSecret: string; mode: "qr" | "credentials"; enabled: boolean };
 export type PersonaConfig = { id: string; name: string; description: string; systemPrompt: string };
 export type WebSearchProvider = "tavily" | "brave" | "exa" | "serper";
-export type ToolSettings = { enabled: string[]; mcpEnabled: boolean; skillsEnabled: boolean; webSearch: { provider: WebSearchProvider; apiKeys: Record<WebSearchProvider, string> } };
+export type ToolSettings = { enabled: string[]; mcpEnabled: boolean; skillsEnabled: boolean; stickersEnabled: boolean; stickerAutoCollectProbability: number; stickerTaggerProviderId: string; stickerTaggerModelId: string; webSearch: { provider: WebSearchProvider; apiKeys: Record<WebSearchProvider, string> } };
 export type ProactiveGateSettings = { enabled: boolean; mode: "smart" | "probability"; probabilityPercent: number; dailyMessageLimit: number; quietStart: string; quietEnd: string; notifyOnLimit: boolean; aggregationSeconds: number; cooldownMinutes: number; judgeProviderId: string; judgeModelId: string };
-export type McpServerConfig = { id: string; name: string; transport: "stdio" | "http"; command?: string; args?: string[]; url?: string; enabled: boolean };
 export type AppConfig = { qqBots: QqBotConfig[]; providers: ProviderConfig[]; personas: PersonaConfig[]; activePersonaId: string; tools: ToolSettings; mcpServers: McpServerConfig[]; proactiveGate: ProactiveGateSettings };
 export type ChatMessage = { role: "user" | "assistant" | "system"; content: string };
 
@@ -18,7 +19,7 @@ export function createDefaultConfig(): AppConfig {
 		providers: [{ id: "openai", name: "OpenAI 兼容", api: "openai-completions", apiKey: "", baseUrl: "https://api.openai.com/v1", enabled: true, ttsModel: "", imageModel: "", models: [{ id: "gpt-4o-mini", name: "GPT-4o mini", api: "openai-completions", maxOutput: 4096, maxContext: 128000, compressionThreshold: 100000, supportsThinking: false, supportsVision: true, supportsTools: true }] }],
 		personas: [{ id: "default", name: "Miu", description: "温柔可靠的猫娘助手", systemPrompt: "你是 Miu，一只温柔、可靠的猫娘助手。用自然、友善的中文回复，适度使用语气词，不要声称自己执行了未执行的操作。" }],
 		activePersonaId: "default",
-		tools: { enabled: ["web_search"], mcpEnabled: false, skillsEnabled: false, webSearch: { provider: "tavily", apiKeys: { tavily: "", brave: "", exa: "", serper: "" } } },
+		tools: { enabled: ["web_search"], mcpEnabled: false, skillsEnabled: false, stickersEnabled: false, stickerAutoCollectProbability: 0, stickerTaggerProviderId: "", stickerTaggerModelId: "", webSearch: { provider: "tavily", apiKeys: { tavily: "", brave: "", exa: "", serper: "" } } },
 		mcpServers: [],
 		proactiveGate: { enabled: false, mode: "smart", probabilityPercent: 10, dailyMessageLimit: 0, quietStart: "00:00", quietEnd: "00:00", notifyOnLimit: false, aggregationSeconds: 8, cooldownMinutes: 10, judgeProviderId: "", judgeModelId: "" },
 	};

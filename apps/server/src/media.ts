@@ -36,7 +36,7 @@ function mediaKind(mimeType: string): MediaKind {
 	return "file";
 }
 
-async function downloadImage(url: string, fetcher: typeof fetch): Promise<{ bytes: Uint8Array; mimeType: string }> {
+export async function downloadImage(url: string, fetcher: typeof fetch = fetch): Promise<{ bytes: Uint8Array; mimeType: string }> {
 	const parsed = new URL(url);
 	if (parsed.protocol !== "https:" || parsed.username || parsed.password || isIP(parsed.hostname) || parsed.hostname.endsWith(".localhost") || parsed.hostname.endsWith(".local") || !parsed.hostname.includes(".")) {
 		throw new Error("图片附件地址必须是公网 HTTPS URL");

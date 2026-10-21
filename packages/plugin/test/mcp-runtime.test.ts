@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { McpRuntime } from "../src/mcp-runtime.ts";
+import { McpRuntime } from "../src/tools/mcp/runtime.ts";
 
 describe("MCP runtime tool gates", () => {
 	it("keeps disabled servers out of the agent tool set", async () => {

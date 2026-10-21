@@ -3,7 +3,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { loadSkills, loadSkillsFromDir } from "@miubot/context/skills";
 import { Type } from "typebox";
 import { Unzip, UnzipInflate, UnzipPassThrough } from "fflate";
-import type { ToolDefinition } from "@miubot/plugin/extensions/index";
+import type { ToolDefinition } from "../../extensions/index.ts";
 
 const skillSchema = Type.Object({ name: Type.String({ description: "Skill name from the available skills list" }) });
 

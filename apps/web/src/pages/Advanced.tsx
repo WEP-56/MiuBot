@@ -354,6 +354,7 @@ export function Tools() {
   const [tools, setTools] = useState<ToolEntry[]>([]);
   const [mcpEnabled, setMcpEnabled] = useState(false);
   const [skillsEnabled, setSkillsEnabled] = useState(false);
+  const [stickersEnabled, setStickersEnabled] = useState(false);
   const [provider, setProvider] = useState<SearchProvider>("tavily");
   const [configured, setConfigured] = useState<Record<SearchProvider, boolean>>({ tavily: false, brave: false, exa: false, serper: false });
   const [apiKey, setApiKey] = useState("");
@@ -361,18 +362,18 @@ export function Tools() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    void fetch("/api/tools").then((response) => response.json()).then((data: { tools: ToolEntry[]; mcpEnabled: boolean; skillsEnabled: boolean; webSearch: { provider: SearchProvider; configuredProviders: Record<SearchProvider, boolean> } }) => {
-      setTools(data.tools); setMcpEnabled(data.mcpEnabled); setSkillsEnabled(data.skillsEnabled); setProvider(data.webSearch.provider); setConfigured(data.webSearch.configuredProviders);
+    void fetch("/api/tools").then((response) => response.json()).then((data: { tools: ToolEntry[]; mcpEnabled: boolean; skillsEnabled: boolean; stickersEnabled: boolean; webSearch: { provider: SearchProvider; configuredProviders: Record<SearchProvider, boolean> } }) => {
+      setTools(data.tools); setMcpEnabled(data.mcpEnabled); setSkillsEnabled(data.skillsEnabled); setStickersEnabled(data.stickersEnabled); setProvider(data.webSearch.provider); setConfigured(data.webSearch.configuredProviders);
     }).catch(() => setNotice("无法连接 Miubot Server"));
   }, []);
 
-  const save = async (nextTools: ToolEntry[], nextProvider = provider, key = "", nextMcpEnabled = mcpEnabled, nextSkillsEnabled = skillsEnabled) => {
+  const save = async (nextTools: ToolEntry[], nextProvider = provider, key = "", nextMcpEnabled = mcpEnabled, nextSkillsEnabled = skillsEnabled, nextStickersEnabled = stickersEnabled) => {
     setBusy(true); setNotice("");
     try {
-      const response = await fetch("/api/tools", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: nextTools.filter((item) => item.enabled).map((item) => item.name), mcpEnabled: nextMcpEnabled, skillsEnabled: nextSkillsEnabled, webSearch: { provider: nextProvider, apiKeys: key ? { [nextProvider]: key } : {} } }) });
-      const data = await response.json() as { tools?: ToolEntry[]; mcpEnabled?: boolean; skillsEnabled?: boolean; webSearch?: { provider: SearchProvider; configuredProviders: Record<SearchProvider, boolean> }; message?: string };
+      const response = await fetch("/api/tools", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: nextTools.filter((item) => item.enabled).map((item) => item.name), mcpEnabled: nextMcpEnabled, skillsEnabled: nextSkillsEnabled, stickersEnabled: nextStickersEnabled, webSearch: { provider: nextProvider, apiKeys: key ? { [nextProvider]: key } : {} } }) });
+      const data = await response.json() as { tools?: ToolEntry[]; mcpEnabled?: boolean; skillsEnabled?: boolean; stickersEnabled?: boolean; webSearch?: { provider: SearchProvider; configuredProviders: Record<SearchProvider, boolean> }; message?: string };
       if (!response.ok || !data.tools || !data.webSearch) throw new Error(data.message ?? "保存失败");
-      setTools(data.tools); setMcpEnabled(data.mcpEnabled ?? false); setSkillsEnabled(data.skillsEnabled ?? false); setProvider(data.webSearch.provider); setConfigured(data.webSearch.configuredProviders); setApiKey(""); setNotice("配置已保存");
+      setTools(data.tools); setMcpEnabled(data.mcpEnabled ?? false); setSkillsEnabled(data.skillsEnabled ?? false); setStickersEnabled(data.stickersEnabled ?? false); setProvider(data.webSearch.provider); setConfigured(data.webSearch.configuredProviders); setApiKey(""); setNotice("配置已保存");
     } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   };
@@ -382,6 +383,7 @@ export function Tools() {
       <div><h1 className="text-[20px] font-bold">Tools</h1><p className="text-[13px] text-[#777777] mt-0.5">Pi Agent 工具与网页搜索</p></div>
       <article className="sketch-card flex items-center justify-between gap-4 p-4"><div><div className="font-semibold">MCP tools<code className="ml-2 text-xs text-[#888888]">mcp__*</code></div><p className="mt-1 text-xs text-[#888888]">全局控制已连接 MCP 服务器提供的工具；服务器连接状态在 MCP 页面单独管理。</p></div><label className="flex shrink-0 items-center gap-2 text-sm"><input type="checkbox" checked={mcpEnabled} disabled={busy} onChange={(event) => { setMcpEnabled(event.target.checked); void save(tools, provider, "", event.target.checked); }}/>启用</label></article>
       <article className="sketch-card flex items-center justify-between gap-4 p-4"><div><div className="font-semibold">Skills</div><p className="mt-1 text-xs text-[#888888]">发现技能指令并允许 Agent 按名称加载匹配的 Skill。</p></div><label className="flex shrink-0 items-center gap-2 text-sm"><input type="checkbox" checked={skillsEnabled} disabled={busy} onChange={(event) => { setSkillsEnabled(event.target.checked); void save(tools, provider, "", mcpEnabled, event.target.checked); }}/>启用</label></article>
+      <article className="sketch-card flex items-center justify-between gap-4 p-4"><div><div className="font-semibold">表情包 tools</div><p className="mt-1 text-xs text-[#888888]">允许 Agent 搜索并发送已审核表情；还需在会话对象配置中授权。</p></div><label className="flex shrink-0 items-center gap-2 text-sm"><input type="checkbox" checked={stickersEnabled} disabled={busy} onChange={(event) => { setStickersEnabled(event.target.checked); void save(tools, provider, "", mcpEnabled, skillsEnabled, event.target.checked); }}/>启用</label></article>
       {tools.map((tool) => <article key={tool.name} className="sketch-card flex items-center justify-between gap-4 p-4">
         <div className="min-w-0"><div className="font-semibold">{tool.label}<code className="ml-2 text-xs text-[#888888]">{tool.name}</code></div><p className="mt-1 text-xs text-[#888888]">{tool.description}</p>
           {tool.name === "web_search" && <div className="mt-3 flex flex-wrap items-center gap-2">

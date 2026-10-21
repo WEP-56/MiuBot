@@ -46,6 +46,16 @@ miubot/
 - **Agent** 在被授权的工具集合中决定如何完成任务。
 - **Plugin** 提供扩展能力，但宿主掌握最终权限与执行审计。
 
+## 内置 Tools 与插件宿主
+
+- 所有模型可调用的内置 Tool 定义统一归 `packages/plugin/src/tools/`，包括 Tool schema、描述、`promptSnippet` 和执行逻辑。按能力分目录，避免把不同领域的 Tool 实现散落在 server。
+- `apps/server` 是运行时宿主和组合根，不实现内置 Tool。它负责配置、授权和生命周期，并将凭据、数据服务及平台发送回调注入 Tool；Tool package 不反向依赖 app。
+- MCP 协议客户端留在 `packages/mcp`；MCP 连接生命周期及协议工具到 Pi Extension ToolDefinition 的适配归 `packages/plugin/src/tools/mcp`。服务端负责产品配置 API 与宿主开关策略。
+- Tool 使用的存储、平台适配、采集和后台任务继续归其领域模块。将 Tool 定义集中到 plugin，不代表把所有底层业务实现都塞进 plugin。
+- Pi Extension API 提供 Tool/命令注册、生命周期 Hook、上下文和 Provider 请求修改、工具调用拦截等能力。Miubot 应复用这些扩展点，并由宿主实现授权和审计。
+- Pi 的 TUI 扩展 UI 不是 WebUI 扩展 API。Miubot 若开放 WebUI 扩展，需定义独立的受控贡献接口，由宿主决定页面/设置区域、数据访问和权限；不允许扩展绕过宿主直接操作 Web 应用内部状态。
+- `apps/server/src/index.ts` 逐步收敛为应用装配入口。避免将 Agent/Session 生命周期实现复制进 server；由 server 通过 `packages/session` 与 `packages/plugin` 的稳定接口驱动运行时。
+
 ## Fork 维护策略
 
 1. 初始保留上游完整提交历史与明确的 `upstream` 远端；记录 Pi 来源/许可证。

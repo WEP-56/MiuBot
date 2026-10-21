@@ -9,14 +9,12 @@
 	},
 	"dependencies": {
 		"@miubot/context": "0.0.0",
-		"@miubot/mcp": "0.0.0",
 		"@miubot/plugin": "0.0.0",
 		"@miubot/provider": "0.0.0",
 		"@miubot/session": "0.0.0",
 		"@miubot/shared": "0.0.0",
 		"@tencent-connect/qqbot-connector": "1.2.0",
 		"@tencent-connect/qqbot-nodejs": "^1.0.5",
-		"fflate": "0.8.2",
 		"qrcode": "^1.5.4",
 		"typebox": "1.3.27"
 	},
