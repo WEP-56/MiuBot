@@ -1,9 +1,9 @@
 # MiuBot
 
-基于 Pi 内核改造的 QQ 机器人管理平台。
+基于 Pi 内核构建的 QQ 机器人管理平台。
 
-- 运行时：`apps/server`（建设中）
-- 工作台：`apps/web`（建设中）
+- 运行时：`apps/server`（QQ 官方 Bot、模型调用、会话与工具运行）
+- 工作台：`apps/web`（平台、提供商、人格、会话、调试台与设置）
 - 复用内核：`packages/{provider,agent,context,plugin,session}`
 - 移植来源与模块映射：`docs/10-技术架构/04-Pi移植记录.md`
 - 开发约定：`AGENTS.md`
