@@ -1,6 +1,6 @@
 import { Icon } from "../components/Icon";
 import { useTheme } from "../theme";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /* 主动行为页面 */
 export function Proactive() {
@@ -29,94 +29,107 @@ export function Proactive() {
 
 /* MCP 页面 */
 export function MCP() {
-  const mcpServers = [
-    { name: "fs-tools", desc: "本地工作区文件系统读写权限", tools: "6 个可用工具", status: "online" },
-    { name: "web-search-brave", desc: "实时联网网页搜索", tools: "2 个可用工具", status: "online" },
-    { name: "memory-graph", desc: "本地长期实体关系图谱检索", tools: "4 个可用工具", status: "online" },
-    { name: "github-mcp", desc: "仓库代码、Issue 与 PR 操作", tools: "8 个可用工具", status: "offline" },
-  ];
-
-  return (
-    <div className="flex-1 h-full overflow-y-auto bg-black text-white p-7 select-none">
-      <div className="max-w-[760px] space-y-4">
-        <div className="flex items-start justify-between pb-1">
-          <div>
-            <h1 className="text-[20px] font-bold text-white tracking-tight">MCP</h1>
-            <p className="text-[13px] text-[#777777] mt-0.5">外部 Model Context Protocol 工具服务器连接</p>
-          </div>
-          <button className="btn-primary-white">
-            <Icon.Plus size={14} />
-            <span>添加服务器</span>
-          </button>
-        </div>
-
-        <div className="space-y-3">
-          {mcpServers.map((s) => (
-            <div key={s.name} className="sketch-card p-5 cursor-pointer">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-[15px] font-bold text-white">{s.name}</div>
-                  <div className="text-[12.5px] text-[#777777] mt-0.5">{s.desc}</div>
-                </div>
-                {s.status === "online" ? (
-                  <span className="pill-green">已挂载</span>
-                ) : (
-                  <span className="pill-gray">已断开</span>
-                )}
-              </div>
-              <div className="mt-4 pt-3 border-t border-[rgba(255,255,255,0.06)] flex justify-between text-[12.5px] text-[#888888]">
-                <span>{s.tools}</span>
-                <span className="text-[#cccccc] hover:text-white">配置权限</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
+  type Server = { id: string; name: string; transport: "stdio" | "http"; command?: string; args?: string[]; url?: string; enabled: boolean; state: "disconnected" | "connecting" | "connected" | "error"; error?: string; toolCount: number; toolNames: string[] };
+  type Draft = { id: string; name: string; transport: "stdio" | "http"; command: string; args: string; url: string };
+  const emptyDraft = (): Draft => ({ id: "", name: "", transport: "stdio", command: "", args: "[]", url: "" });
+  const [servers, setServers] = useState<Server[]>([]);
+  const [draft, setDraft] = useState<Draft>(emptyDraft);
+  const [adding, setAdding] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
+  const load = async () => {
+    const response = await fetch("/api/mcp");
+    const data = await response.json() as { servers: Server[] };
+    if (!response.ok) throw new Error("读取 MCP 服务器失败");
+    setServers(data.servers);
+  };
+  useEffect(() => { void load().catch((error) => setNotice(error instanceof Error ? error.message : String(error))); }, []);
+  const save = async (next: Server[]) => {
+    setBusy(true); setNotice("");
+    try {
+      const response = await fetch("/api/mcp", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ servers: next }) });
+      const data = await response.json() as { servers?: Server[]; message?: string };
+      if (!response.ok || !data.servers) throw new Error(data.message ?? "保存 MCP 配置失败");
+      setServers(data.servers); setNotice("MCP 配置已保存");
+    } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(false); }
+  };
+  const add = async () => {
+    let args: string[] = [];
+    try { const parsed: unknown = JSON.parse(draft.args); if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) throw new Error(); args = parsed; }
+    catch { setNotice("启动参数必须是 JSON 字符串数组"); return; }
+    const server: Server = { id: draft.id.trim(), name: draft.name.trim(), transport: draft.transport, enabled: true, state: "disconnected", toolCount: 0, toolNames: [], ...(draft.transport === "stdio" ? { command: draft.command.trim(), args } : { url: draft.url.trim() }) };
+    await save([...servers, server]);
+    setDraft(emptyDraft()); setAdding(false);
+  };
+  const statusLabel: Record<Server["state"], string> = { connected: "已连接", connecting: "连接中", disconnected: "已断开", error: "连接失败" };
+  return <div className="flex-1 h-full overflow-y-auto bg-black p-7 text-white"><div className="max-w-[760px] space-y-4">
+    <div className="flex items-start justify-between gap-4"><div><h1 className="text-[20px] font-bold">MCP</h1><p className="mt-0.5 text-[13px] text-[#777777]">连接外部工具服务器；工具是否可调用由高级配置中的全局开关控制。</p></div><button className="btn-primary-white shrink-0" disabled={busy} onClick={() => setAdding(!adding)}><Icon.Plus size={14}/><span>添加服务器</span></button></div>
+    {adding && <section className="sketch-card space-y-3 p-5"><div className="grid gap-3 sm:grid-cols-2"><label className="text-sm">服务器 ID<input className="sketch-input mt-1 w-full" value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} placeholder="filesystem"/></label><label className="text-sm">名称<input className="sketch-input mt-1 w-full" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="Filesystem"/></label><label className="text-sm">传输方式<select className="sketch-input mt-1 w-full" value={draft.transport} onChange={(event) => setDraft({ ...draft, transport: event.target.value as Draft["transport"] })}><option value="stdio">本地进程 (stdio)</option><option value="http">Streamable HTTP</option></select></label>
+      {draft.transport === "stdio" ? <><label className="text-sm">启动命令<input className="sketch-input mt-1 w-full" value={draft.command} onChange={(event) => setDraft({ ...draft, command: event.target.value })} placeholder="npx.cmd"/></label><label className="text-sm sm:col-span-2">参数（JSON 字符串数组）<textarea className="sketch-input mt-1 min-h-20 w-full" value={draft.args} onChange={(event) => setDraft({ ...draft, args: event.target.value })}/></label></> : <label className="text-sm sm:col-span-2">服务器 URL<input className="sketch-input mt-1 w-full" value={draft.url} onChange={(event) => setDraft({ ...draft, url: event.target.value })} placeholder="https://mcp.example.com/mcp"/></label>}</div><div className="flex gap-2"><button className="btn-pill-dark" disabled={busy} onClick={() => void add()}>保存并连接</button><button className="btn-pill-dark" disabled={busy} onClick={() => { setAdding(false); setDraft(emptyDraft()); }}>取消</button></div></section>}
+    {servers.length === 0 && <p className="sketch-card p-6 text-center text-sm text-[#888888]">尚未配置 MCP 服务器</p>}
+    {servers.map((server) => <article key={server.id} className="sketch-card space-y-3 p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><h2 className="font-semibold">{server.name}<code className="ml-2 text-xs text-[#888888]">{server.id}</code></h2><p className="mt-1 break-all text-xs text-[#888888]">{server.transport === "stdio" ? `${server.command} ${(server.args ?? []).join(" ")}` : server.url}</p></div><div className="flex items-center gap-3"><span className={server.state === "connected" ? "pill-green" : server.state === "error" ? "pill-red" : "pill-gray"}>{statusLabel[server.state]}</span><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={server.enabled} disabled={busy} onChange={(event) => void save(servers.map((item) => item.id === server.id ? { ...item, enabled: event.target.checked } : item))}/>启用</label></div></div>
+      {server.error && <p className="text-xs text-red-400" role="alert">{server.error}</p>}{server.toolNames.length > 0 && <div className="border-t pt-3 text-xs text-[#888888]" style={{ borderColor: "var(--hairline)" }}>发现 {server.toolCount} 个工具：{server.toolNames.join("、")}</div>}
+      <div className="flex justify-end"><button className="text-xs text-red-400 hover:text-red-300" disabled={busy} onClick={() => void save(servers.filter((item) => item.id !== server.id))}>删除服务器</button></div>
+    </article>)}
+    {notice && <p className="text-sm text-[#aaaaaa]" role="status">{notice}</p>}
+  </div></div>;
 }
 
 /* Skills 页面 */
 export function Skills() {
-  const skills = [
-    { name: "daily-summary", desc: "每日群聊关键话题自动聚合简报", ver: "v1.2.0" },
-    { name: "sd-image-craft", desc: "Stable Diffusion 局部重绘与风格生图", ver: "v2.0.4" },
-    { name: "bilibili-summary", desc: "B 站视频字幕提取与快速问答", ver: "v0.9.1" },
-  ];
-
-  return (
-    <div className="flex-1 h-full overflow-y-auto bg-black text-white p-7 select-none">
-      <div className="max-w-[760px] space-y-4">
-        <div className="flex items-start justify-between pb-1">
-          <div>
-            <h1 className="text-[20px] font-bold text-white tracking-tight">Skills</h1>
-            <p className="text-[13px] text-[#777777] mt-0.5">管理已安装的 Agent 专属技能</p>
-          </div>
-          <button className="btn-primary-white">
-            <Icon.Plus size={14} />
-            <span>安装技能</span>
-          </button>
-        </div>
-
-        <div className="space-y-3">
-          {skills.map((sk) => (
-            <div key={sk.name} className="sketch-card p-5 flex items-center justify-between">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[15px] font-bold text-white">{sk.name}</span>
-                  <span className="text-[11px] text-[#888888] font-mono bg-[#141414] px-1.5 py-0.5 rounded border border-[#2a2a2a]">
-                    {sk.ver}
-                  </span>
-                </div>
-                <div className="text-[12.5px] text-[#777777] mt-1">{sk.desc}</div>
-              </div>
-              <span className="pill-green">已启用</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
+  type Skill = { name: string; description: string; filePath: string; baseDir: string; disableModelInvocation: boolean };
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [enabled, setEnabled] = useState(false);
+  const [sourceUrl, setSourceUrl] = useState("");
+  const zipInput = useRef<HTMLInputElement>(null);
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  const load = async () => {
+    const response = await fetch("/api/skills");
+    const data = await response.json() as { skills?: Skill[]; enabled?: boolean; message?: string };
+    if (!response.ok || !data.skills) throw new Error(data.message ?? "读取 Skills 失败");
+    setSkills(data.skills); setEnabled(data.enabled === true);
+  };
+  useEffect(() => { void load().catch((error) => setNotice(error instanceof Error ? error.message : String(error))); }, []);
+  const install = async () => {
+    setBusy(true); setNotice("");
+    try {
+      const response = await fetch("/api/skills", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sourceUrl: sourceUrl.trim() }) });
+      const data = await response.json() as { skills?: Skill[]; message?: string };
+      if (!response.ok || !data.skills) throw new Error(data.message ?? "安装 Skill 失败");
+      setSkills(data.skills); setSourceUrl(""); setAdding(false); setNotice("Skill 已安装");
+    } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(false); }
+  };
+  const importZip = async (file: File) => {
+    setBusy(true); setNotice("");
+    try {
+      const response = await fetch("/api/skills/import", { method: "POST", headers: { "content-type": "application/zip" }, body: await file.arrayBuffer() });
+      const data = await response.json() as { skills?: Skill[]; message?: string };
+      if (!response.ok || !data.skills) throw new Error(data.message ?? "导入 ZIP 失败");
+      setSkills(data.skills); setNotice(`已导入 ${file.name}`);
+    } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(false); if (zipInput.current) zipInput.current.value = ""; }
+  };
+  const remove = async (skill: Skill) => {
+    if (!window.confirm(`删除 Skill ${skill.name}？`)) return;
+    setBusy(true); setNotice("");
+    try {
+      const response = await fetch(`/api/skills/${encodeURIComponent(skill.name)}`, { method: "DELETE" });
+      const data = await response.json() as { skills?: Skill[]; message?: string };
+      if (!response.ok || !data.skills) throw new Error(data.message ?? "删除 Skill 失败");
+      setSkills(data.skills); setNotice("Skill 已删除");
+    } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(false); }
+  };
+  return <div className="flex-1 h-full overflow-y-auto bg-black p-7 text-white"><div className="max-w-[760px] space-y-4">
+    <div className="flex flex-wrap items-start justify-between gap-4"><div><h1 className="text-[20px] font-bold">Skills</h1><p className="mt-0.5 text-[13px] text-[#777777]">管理已安装的 Agent 专属技能</p></div><div className="flex flex-wrap items-center gap-2"><span className={enabled ? "pill-green" : "pill-gray"}>{enabled ? "全局已启用" : "全局未启用"}</span><button className="btn-pill-dark" title="刷新" aria-label="刷新 Skills" disabled={busy} onClick={() => void load().catch((error) => setNotice(error instanceof Error ? error.message : String(error)))}><Icon.Refresh size={14}/></button><input ref={zipInput} type="file" accept=".zip,application/zip" className="hidden" disabled={busy} onChange={(event) => { const file = event.target.files?.[0]; if (file) void importZip(file); }}/><button className="btn-pill-dark" disabled={busy} onClick={() => zipInput.current?.click()}>导入 ZIP</button><button className="btn-primary-white" disabled={busy} onClick={() => setAdding(!adding)}><Icon.Plus size={14}/><span>从 GitHub 安装</span></button></div></div>
+    {adding && <section className="sketch-card space-y-3 p-5"><label className="block text-sm">GitHub 技能目录 URL<input className="sketch-input mt-1 w-full" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="https://github.com/owner/repo/tree/main/skills/my-skill" /></label><p className="text-xs text-[#888888]">目录必须包含一个 SKILL.md；安装后保存到 Agent Skills 目录。</p><div className="flex gap-2"><button className="btn-pill-dark" disabled={busy || !sourceUrl.trim()} onClick={() => void install()}>安装</button><button className="btn-pill-dark" disabled={busy} onClick={() => { setAdding(false); setSourceUrl(""); }}>取消</button></div></section>}
+    {skills.length === 0 ? <p className="sketch-card p-6 text-center text-sm text-[#888888]">暂无已安装 Skill</p> : <div className="space-y-3">{skills.map((skill) => <article key={`${skill.name}-${skill.filePath}`} className="sketch-card flex flex-wrap items-start justify-between gap-4 p-5"><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="font-bold">{skill.name}</span>{skill.disableModelInvocation ? <span className="pill-gray">仅手动调用</span> : <span className="pill-green">可自动发现</span>}</div><p className="mt-1 text-sm text-[#888888]">{skill.description}</p><p className="mt-2 break-all text-xs text-[#666666]">{skill.filePath}</p></div><button className="btn-pill-dark text-red-400" disabled={busy} onClick={() => void remove(skill)}>删除</button></article>)}</div>}
+    {notice && <p className="text-sm text-[#aaaaaa]" role="status">{notice}</p>}
+  </div></div>;
 }
 
 /* 记忆与知识库 */
@@ -339,6 +352,8 @@ const searchProviders: Array<{ id: SearchProvider; label: string }> = [
 
 export function Tools() {
   const [tools, setTools] = useState<ToolEntry[]>([]);
+  const [mcpEnabled, setMcpEnabled] = useState(false);
+  const [skillsEnabled, setSkillsEnabled] = useState(false);
   const [provider, setProvider] = useState<SearchProvider>("tavily");
   const [configured, setConfigured] = useState<Record<SearchProvider, boolean>>({ tavily: false, brave: false, exa: false, serper: false });
   const [apiKey, setApiKey] = useState("");
@@ -346,18 +361,18 @@ export function Tools() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    void fetch("/api/tools").then((response) => response.json()).then((data: { tools: ToolEntry[]; webSearch: { provider: SearchProvider; configuredProviders: Record<SearchProvider, boolean> } }) => {
-      setTools(data.tools); setProvider(data.webSearch.provider); setConfigured(data.webSearch.configuredProviders);
+    void fetch("/api/tools").then((response) => response.json()).then((data: { tools: ToolEntry[]; mcpEnabled: boolean; skillsEnabled: boolean; webSearch: { provider: SearchProvider; configuredProviders: Record<SearchProvider, boolean> } }) => {
+      setTools(data.tools); setMcpEnabled(data.mcpEnabled); setSkillsEnabled(data.skillsEnabled); setProvider(data.webSearch.provider); setConfigured(data.webSearch.configuredProviders);
     }).catch(() => setNotice("无法连接 Miubot Server"));
   }, []);
 
-  const save = async (nextTools: ToolEntry[], nextProvider = provider, key = "") => {
+  const save = async (nextTools: ToolEntry[], nextProvider = provider, key = "", nextMcpEnabled = mcpEnabled, nextSkillsEnabled = skillsEnabled) => {
     setBusy(true); setNotice("");
     try {
-      const response = await fetch("/api/tools", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: nextTools.filter((item) => item.enabled).map((item) => item.name), webSearch: { provider: nextProvider, apiKeys: key ? { [nextProvider]: key } : {} } }) });
-      const data = await response.json() as { tools?: ToolEntry[]; webSearch?: { provider: SearchProvider; configuredProviders: Record<SearchProvider, boolean> }; message?: string };
+      const response = await fetch("/api/tools", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: nextTools.filter((item) => item.enabled).map((item) => item.name), mcpEnabled: nextMcpEnabled, skillsEnabled: nextSkillsEnabled, webSearch: { provider: nextProvider, apiKeys: key ? { [nextProvider]: key } : {} } }) });
+      const data = await response.json() as { tools?: ToolEntry[]; mcpEnabled?: boolean; skillsEnabled?: boolean; webSearch?: { provider: SearchProvider; configuredProviders: Record<SearchProvider, boolean> }; message?: string };
       if (!response.ok || !data.tools || !data.webSearch) throw new Error(data.message ?? "保存失败");
-      setTools(data.tools); setProvider(data.webSearch.provider); setConfigured(data.webSearch.configuredProviders); setApiKey(""); setNotice("配置已保存");
+      setTools(data.tools); setMcpEnabled(data.mcpEnabled ?? false); setSkillsEnabled(data.skillsEnabled ?? false); setProvider(data.webSearch.provider); setConfigured(data.webSearch.configuredProviders); setApiKey(""); setNotice("配置已保存");
     } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   };
@@ -365,6 +380,8 @@ export function Tools() {
   return <div className="flex-1 h-full overflow-y-auto bg-black text-white p-7">
     <div className="max-w-[760px] space-y-4">
       <div><h1 className="text-[20px] font-bold">Tools</h1><p className="text-[13px] text-[#777777] mt-0.5">Pi Agent 工具与网页搜索</p></div>
+      <article className="sketch-card flex items-center justify-between gap-4 p-4"><div><div className="font-semibold">MCP tools<code className="ml-2 text-xs text-[#888888]">mcp__*</code></div><p className="mt-1 text-xs text-[#888888]">全局控制已连接 MCP 服务器提供的工具；服务器连接状态在 MCP 页面单独管理。</p></div><label className="flex shrink-0 items-center gap-2 text-sm"><input type="checkbox" checked={mcpEnabled} disabled={busy} onChange={(event) => { setMcpEnabled(event.target.checked); void save(tools, provider, "", event.target.checked); }}/>启用</label></article>
+      <article className="sketch-card flex items-center justify-between gap-4 p-4"><div><div className="font-semibold">Skills</div><p className="mt-1 text-xs text-[#888888]">发现技能指令并允许 Agent 按名称加载匹配的 Skill。</p></div><label className="flex shrink-0 items-center gap-2 text-sm"><input type="checkbox" checked={skillsEnabled} disabled={busy} onChange={(event) => { setSkillsEnabled(event.target.checked); void save(tools, provider, "", mcpEnabled, event.target.checked); }}/>启用</label></article>
       {tools.map((tool) => <article key={tool.name} className="sketch-card flex items-center justify-between gap-4 p-4">
         <div className="min-w-0"><div className="font-semibold">{tool.label}<code className="ml-2 text-xs text-[#888888]">{tool.name}</code></div><p className="mt-1 text-xs text-[#888888]">{tool.description}</p>
           {tool.name === "web_search" && <div className="mt-3 flex flex-wrap items-center gap-2">

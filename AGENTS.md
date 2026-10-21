@@ -20,6 +20,21 @@ packages/
 依赖方向：`agent → provider`、`context → agent/provider/shared`、`plugin → context/agent/provider/shared`、`session → 全部`。
 `session` 与 `plugin` 之间的类型引用是双向的（扩展 API 需要会话类型），运行时代码禁止反向依赖。
 
+## 快速入口
+
+- 项目概览与开发命令：`README.md`
+- 服务端说明与启动：`apps/server/README.md`；入口是 `apps/server/src/index.ts`，运行时配置/模型调用在 `apps/server/src/runtime.ts`
+- Web 工作台说明与启动：`apps/web/README.md`；React 入口是 `apps/web/src/App.tsx`
+- Pi 迁移边界：`docs/10-技术架构/04-Pi移植记录.md`
+- 当前产品进度：`docs/00-产品与全局/03-路线图.md`
+- 消息流水线与安全约束：`docs/10-技术架构/02-消息处理与安全.md`
+
+当前运行形态是单机 Node 服务：`apps/server` 提供 `127.0.0.1:8787` 的本机 API，并装配 QQ 官方 Bot；`apps/web` 默认运行在 `127.0.0.1:5173`，将 `/api` 代理到服务端。服务端当前把配置、会话和运行日志保存到 `apps/server/.miubot/`，该目录是本机运行数据，不是源码或测试夹具。
+
+基础闭环已经接通：QQ 官方 Bot（扫码或 AppID/AppSecret）、提供商/模型、人格、群/个人会话、Agent Loop、工具开关、调试台、运行日志和群聊智能插话。MCP 管理、长期记忆、表情包、定时任务、插件安装、完整 Trace、正式数据库持久化等能力以路线图为准，看到 Web 占位页时不要默认其后端已经实现。
+
+接手任务时先看 `git status --short`，再按任务进入对应入口文件；只有需要追踪跨层行为时，才扩展到相关 package 和架构文档。
+
 ## 命令
 
 - 类型检查：`npm run check`（= `tsc --noEmit`，根 tsconfig 用 paths 直连源码）
@@ -38,6 +53,11 @@ packages/
 - 最小改动：不顺手重构、不统一风格、不动无关文件。
 - 删除看似有意的功能或代码前先问。
 - 不为兼容旧行为保留冗余分支，除非用户要求。
+
+## 合作与开发规划（为了效率）
+
+- 涉及前端效果、真实行为测试时，发送简要测试、验收流程，交由用户测试
+
 
 ## 移植自 Pi 的代码
 

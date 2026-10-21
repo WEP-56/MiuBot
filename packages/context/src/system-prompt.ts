@@ -175,7 +175,7 @@ export function buildSystemPromptSections(input: BuildSystemPromptOptions): Syst
 	const readers = ["read", "bash"] as const;
 	const skillFileReadTool =
 		readers.find((tool) => declaredTools.includes(tool)) ??
-		(readers.some((tool) => selectedTools.includes(tool)) ? "indirect" : undefined);
+		(readers.some((tool) => selectedTools.includes(tool)) || selectedTools.includes("load_skill") ? "indirect" : undefined);
 	if (skillFileReadTool && skills.length > 0) {
 		const skillsPrompt = formatSkillsForPrompt(skills, skillFileReadTool).trim();
 		if (skillsPrompt) promptSections.skills = skillsPrompt;

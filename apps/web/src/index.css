@@ -84,7 +84,7 @@ html, body, #root {
 
 /* 主题切换时的柔和过渡 */
 body, aside, main, .sketch-card, .btn-pill-dark, .btn-primary-white,
-.pill-green, .pill-gray, .sketch-input {
+.pill-green, .pill-gray, .pill-red, .sketch-input {
   transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
 }
 
@@ -147,6 +147,19 @@ body, aside, main, .sketch-card, .btn-pill-dark, .btn-primary-white,
   font-size: 12px;
   font-weight: 500;
   border: 1px solid var(--gray-pill-border);
+}
+
+.pill-red {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background-color: var(--red-bg, rgba(239, 68, 68, 0.12));
+  color: var(--red, #ef4444);
+  padding: 2px 10px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--red-border, rgba(239, 68, 68, 0.3));
 }
 
 /* Primary Action Pill Button (like "+ 添加 Bot") */

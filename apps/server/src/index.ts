@@ -2,15 +2,19 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { QQBot } from "@tencent-connect/qqbot-nodejs";
+import { QQBot, type QQBotInboundMessage } from "@tencent-connect/qqbot-nodejs";
 import { startQrConnect, type QrConnectCredentials } from "@tencent-connect/qqbot-connector";
 import QRCode from "qrcode";
 import { Type } from "typebox";
 import type { ToolDefinition } from "@miubot/plugin/extensions/index";
 import { createAgentSession } from "@miubot/session/sdk";
 import type { AgentSession } from "@miubot/session/agent-session";
+import { DefaultResourceLoader } from "@miubot/session/resource-loader";
 import { ModelRuntime } from "@miubot/session/model-runtime";
 import { SessionManager } from "@miubot/session/session-manager";
+import { prepareInboundMedia } from "./media.ts";
+import { McpRuntime, type McpServerConfig } from "./mcp-runtime.ts";
+import { createLoadSkillTool, installSkillFromGitHub, installSkillFromZip, listInstalledSkills, removeInstalledSkill } from "./skill-runtime.ts";
 import { createChatCompletion, createDefaultConfig, evaluateProactiveGate, type AppConfig, type ChatMessage, type ModelConfig, type PersonaConfig, type ProviderConfig, type QqBotConfig, type WebSearchProvider } from "./runtime.ts";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -26,6 +30,7 @@ let modelRuntime: ModelRuntime | undefined;
 const port = Number(process.env.MIUBOT_PORT ?? 8787);
 
 let config: AppConfig = createDefaultConfig();
+const mcpRuntime = new McpRuntime();
 type RuntimeMessage = { role: "user" | "assistant"; content: string; sender?: string; timestamp: string };
 type RuntimeSession = { id: string; scope: "group" | "c2c"; peerId: string; peerName: string; botId: string; title: string; personaId: string; personaName: string; personaPrompt: string; providerId: string; modelId: string; summary: string; compactedThrough: number; messages: RuntimeMessage[]; createdAt: string; updatedAt: string; active: boolean };
 type PeerConfig = { botId: string; scope: "group" | "c2c"; peerId: string; personaId: string; providerId: string; modelId: string; useTools: boolean; features: { activeReply: boolean; stickers: boolean; imageGeneration: boolean; tts: boolean } };
@@ -61,12 +66,15 @@ async function loadConfig(): Promise<void> {
 			qqBots: qqBots.map((bot) => ({ ...bot, nickname: bot.nickname || "QQ Bot", avatarUrl: bot.avatarUrl || "" })),
 			tools: {
 				enabled: Array.isArray(savedTools?.enabled) ? savedTools.enabled : defaults.tools.enabled,
+				mcpEnabled: typeof savedTools?.mcpEnabled === "boolean" ? savedTools.mcpEnabled : defaults.tools.mcpEnabled,
+				skillsEnabled: typeof savedTools?.skillsEnabled === "boolean" ? savedTools.skillsEnabled : defaults.tools.skillsEnabled,
 				webSearch: {
 					provider: savedTools?.webSearch?.provider ?? defaults.tools.webSearch.provider,
 					apiKeys: { ...defaults.tools.webSearch.apiKeys, ...savedTools?.webSearch?.apiKeys },
 				},
 			},
 			proactiveGate: { ...defaults.proactiveGate, ...current.proactiveGate },
+			mcpServers: Array.isArray(current.mcpServers) ? current.mcpServers : defaults.mcpServers,
 		};
 		if (!stored.qqBots && stored.qq) await saveConfig();
 		if (config.qqBots.filter((bot) => bot.enabled).length > 1) {
@@ -201,12 +209,21 @@ function createWebSearchTool(): ToolDefinition<typeof webSearchSchema> {
 
 function enabledTools(): string[] { return config.tools.enabled.filter((name) => toolNames.includes(name)); }
 
+function enabledToolNames(): string[] {
+	return [...enabledTools(), ...(config.tools.skillsEnabled ? ["load_skill"] : []), ...mcpRuntime.getEnabledToolDefinitions().map((tool) => tool.name)];
+}
+
 function applyToolSettings(): void {
 	for (const [sessionId, session] of agentSessions) {
 		const runtimeSession = sessions.find((item) => item.id === sessionId);
 		const peerConfig = runtimeSession && getPeerConfig(runtimeSession.scope, runtimeSession.peerId, runtimeSession.botId);
-		session.setActiveToolsByName(peerConfig?.useTools === false ? [] : enabledTools());
+		session.setActiveToolsByName(peerConfig?.useTools === false ? [] : enabledToolNames());
 	}
+}
+
+function rebuildAgentSessions(): void {
+	for (const session of agentSessions.values()) session.dispose();
+	agentSessions.clear();
 }
 
 async function getPiModel(provider: ProviderConfig, modelConfig: ModelConfig) {
@@ -229,11 +246,13 @@ async function getAgentSession(runtimeSession: RuntimeSession): Promise<AgentSes
 	const modelConfig = provider?.models.find((item) => item.id === runtimeSession.modelId);
 	if (!provider || !modelConfig) throw new Error("该会话使用的模型已不可用，请创建新会话或更新对象配置");
 	const model = await getPiModel(provider, modelConfig);
-	const customTools = [createWebSearchTool()];
-	const created = await createAgentSession({ cwd: dataDir, agentDir, modelRuntime, model, customTools, sessionManager: SessionManager.inMemory(dataDir) });
+			const customTools = [createWebSearchTool(), ...(config.tools.skillsEnabled ? [createLoadSkillTool(dataDir, agentDir)] : []), ...mcpRuntime.getEnabledToolDefinitions()];
+			const resourceLoader = new DefaultResourceLoader({ cwd: dataDir, agentDir, skillsOverride: (base) => ({ ...base, skills: config.tools.skillsEnabled ? base.skills : [] }) });
+			await resourceLoader.reload();
+			const created = await createAgentSession({ cwd: dataDir, agentDir, modelRuntime, model, customTools, resourceLoader, sessionManager: SessionManager.inMemory(dataDir) });
 	const session = created.session;
 	const peerConfig = getPeerConfig(runtimeSession.scope, runtimeSession.peerId, runtimeSession.botId);
-	session.setActiveToolsByName(peerConfig?.useTools === false ? [] : enabledTools());
+	session.setActiveToolsByName(peerConfig?.useTools === false ? [] : enabledToolNames());
 	const systemMessage = session.agent.state.messages[0];
 	if (systemMessage?.role === "system") {
 		const prior = runtimeSession.messages.slice(runtimeSession.compactedThrough).slice(-20).map((message) => (message.role === "user" ? message.sender ?? "用户" : "助手") + ": " + message.content).join("\n");
@@ -369,15 +388,18 @@ async function evaluateActiveReplyWindow(key: string): Promise<void> {
 	} catch (error) { log("ERROR", `智能插话执行失败并静默：${error instanceof Error ? error.message : String(error)}`, session.id); }
 }
 
-async function processQQMessage(bot: QQBot, botConfig: QqBotConfig, message: { kind?: string; rawEventType?: string; content?: string; messageId?: string; senderId?: string; senderName?: string; senderIsBot?: boolean; groupOpenid?: string; author?: { user_openid?: string; member_openid?: string; username?: string; bot?: boolean }; mentions?: Array<{ is_you?: boolean }>; replyTarget: Parameters<QQBot["sendText"]>[0] }): Promise<void> {
+async function processQQMessage(bot: QQBot, botConfig: QqBotConfig, message: QQBotInboundMessage): Promise<void> {
 	const isGroup = message.kind === "group";
-	const peerId = isGroup ? message.groupOpenid : message.senderId ?? message.author?.user_openid;
-	const senderId = message.senderId ?? message.author?.member_openid ?? message.author?.user_openid ?? "unknown";
-	const peerName = message.senderName || message.author?.username || (isGroup ? "QQ 群聊" : `用户 ${senderId.slice(0, 8)}`);
+	if (!isGroup && message.kind !== "c2c") return;
+	const peerId = isGroup ? message.groupOpenid : message.senderId;
+	const senderId = message.senderId || "unknown";
+	const peerName = message.senderName || (isGroup ? "QQ 群聊" : `用户 ${senderId.slice(0, 8)}`);
 	const text = (message.content ?? "").replace(new RegExp(`<@!?${botConfig.appId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}>`, "g"), "").trim();
 	const mentioned = message.rawEventType === "GROUP_AT_MESSAGE_CREATE" || (message.mentions ?? []).some((mention) => mention.is_you) || new RegExp(`<@!?${botConfig.appId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}>`).test(message.content ?? "");
-	if (!peerId || message.senderIsBot || message.author?.bot || !text) return;
-	if (isGroup && !mentioned) { queueActiveReply(bot, botConfig, peerId, peerName, text); return; }
+	if (!peerId || message.senderIsBot) return;
+	const hasAttachments = (message.attachments?.length ?? 0) > 0;
+	if (!text && !hasAttachments) return;
+	if (isGroup && !mentioned) { queueActiveReply(bot, botConfig, peerId, peerName, text || (hasAttachments ? "[收到附件消息]" : "")); return; }
 	if (isGroup && mentioned) {
 		const windowKey = `${botConfig.id}:group:${peerId}`;
 		const pendingWindow = activeReplyWindows.get(windowKey);
@@ -387,14 +409,14 @@ async function processQQMessage(bot: QQBot, botConfig: QqBotConfig, message: { k
 	const previous = targetQueues.get(queueKey) ?? Promise.resolve();
 	const next = previous.then(async () => {
 		let session = sessions.find((item) => item.active && item.botId === botConfig.id && item.scope === (isGroup ? "group" : "c2c") && item.peerId === peerId);
-		if (text === "/new") {
+		if (text === "/new" && !hasAttachments) {
 			session = createSession(isGroup ? "group" : "c2c", peerId, peerName, botConfig.id);
 			await saveSessions(); log("INFO", `创建新会话：${peerName} (${isGroup ? "群聊" : "私聊"})`, session.id);
 			await bot.sendText(message.replyTarget, "已开始新会话。");
 			return;
 		}
 		if (!session) { session = createSession(isGroup ? "group" : "c2c", peerId, peerName, botConfig.id); await saveSessions(); log("INFO", `首次消息创建会话：${peerName} (${isGroup ? "群聊" : "私聊"})`, session.id); }
-		if (text === "/compact") {
+		if (text === "/compact" && !hasAttachments) {
 			if (session.messages.length < 2) { await bot.sendText(message.replyTarget, "当前会话内容较少，暂时不需要压缩。"); return; }
 			const agentSession = await getAgentSession(session);
 			const compacted = await agentSession.compact("Summarize the conversation, preserving facts, preferences, decisions, and unfinished tasks.");
@@ -402,12 +424,17 @@ async function processQQMessage(bot: QQBot, botConfig: QqBotConfig, message: { k
 			log("INFO", "上下文已压缩", session.id); await bot.sendText(message.replyTarget, "上下文压缩完成。"); return;
 		}
 		const agentSession = await getAgentSession(session);
-		session.messages.push({ role: "user", content: text, sender: peerName, timestamp: new Date().toISOString() });
-		log("INFO", `收到${isGroup ? "群聊" : "私聊"}消息：${text.slice(0, 300)}`, session.id);
-		try { await agentSession.prompt(text); } catch (error) { const detail = error instanceof Error ? error.message : String(error); log("ERROR", `Agent 执行失败：${detail}`, session.id); await bot.sendText(message.replyTarget, `Agent 执行失败：${detail}`); session.messages.pop(); await saveSessions(); return; }
+		const provider = config.providers.find((item) => item.id === session.providerId);
+		const modelConfig = provider?.models.find((item) => item.id === session.modelId);
+		const media = await prepareInboundMedia(message, { supportsVision: modelConfig?.supportsVision === true });
+		const prompt = [text, media.context].filter(Boolean).join("\n\n") || (media.images.length > 0 ? "请查看并描述这张图片。" : "请处理这条附件消息。");
+		const persistedContent = [text, ...media.attachments.map((attachment) => `[${attachment.kind}: ${attachment.fileName ?? attachment.mimeType}]`)].filter(Boolean).join("\n");
+		session.messages.push({ role: "user", content: persistedContent, sender: peerName, timestamp: new Date().toISOString() });
+		log("INFO", `收到${isGroup ? "群聊" : "私聊"}消息：${text.slice(0, 300)}；附件 ${media.attachments.length}`, session.id);
+		try { await agentSession.prompt(prompt, { images: media.images }); } catch (error) { const detail = error instanceof Error ? error.message : String(error); log("ERROR", `Agent 执行失败：${detail}`, session.id); await bot.sendText(message.replyTarget, `Agent 执行失败：${detail}`); session.messages.pop(); await saveSessions(); return; }
 		const answer = agentSession.getLastAssistantText() ?? "";
 		session.messages.push({ role: "assistant", content: answer, timestamp: new Date().toISOString() });
-		if (session.title === "新会话") session.title = text.slice(0, 36);
+		if (session.title === "新会话") session.title = (text || "图片消息").slice(0, 36);
 		session.updatedAt = new Date().toISOString(); await saveSessions();
 		log("INFO", `Agent 回复完成：${agentSession.model?.provider}/${agentSession.model?.id}`, session.id);
 		await bot.sendText(message.replyTarget, answer);
@@ -428,6 +455,18 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
 	if (chunks.length === 0) return {};
 	const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
 	return typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
+}
+
+async function binaryBody(req: IncomingMessage, maxBytes: number): Promise<Uint8Array> {
+	const chunks: Buffer[] = [];
+	let size = 0;
+	for await (const chunk of req) {
+		const buffer = Buffer.from(chunk);
+		size += buffer.byteLength;
+		if (size > maxBytes) throw new Error("上传文件超过大小限制");
+		chunks.push(buffer);
+	}
+	return new Uint8Array(Buffer.concat(chunks));
 }
 
 function publicConfig(): { qqBots: Array<Omit<QqBotConfig, "appSecret"> & { credentialsConfigured: boolean }>; providers: Array<Omit<ProviderConfig, "apiKey"> & { apiKeyConfigured: boolean }> } {
@@ -543,7 +582,44 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
 			return json(res, 200, publicConfig());
 		}
 		if (url.pathname === "/api/tools" && req.method === "GET") {
-			return json(res, 200, { tools: toolCatalog.map((tool) => ({ ...tool, enabled: config.tools.enabled.includes(tool.name) })), webSearch: { provider: config.tools.webSearch.provider, configuredProviders: Object.fromEntries(Object.entries(config.tools.webSearch.apiKeys).map(([name, key]) => [name, Boolean(key)])) } });
+			return json(res, 200, { tools: toolCatalog.map((tool) => ({ ...tool, enabled: config.tools.enabled.includes(tool.name) })), mcpEnabled: config.tools.mcpEnabled, skillsEnabled: config.tools.skillsEnabled, webSearch: { provider: config.tools.webSearch.provider, configuredProviders: Object.fromEntries(Object.entries(config.tools.webSearch.apiKeys).map(([name, key]) => [name, Boolean(key)])) } });
+		}
+		if (url.pathname === "/api/mcp" && req.method === "GET") return json(res, 200, { mcpEnabled: config.tools.mcpEnabled, servers: mcpRuntime.getStatuses() });
+		if (url.pathname === "/api/mcp" && req.method === "PUT") {
+			const input = await body(req);
+			if (!Array.isArray(input.servers)) return json(res, 400, { ok: false, message: "MCP 服务器列表无效" });
+			const servers: McpServerConfig[] = [];
+			const ids = new Set<string>();
+			for (const item of input.servers) {
+				if (typeof item !== "object" || item === null) return json(res, 400, { ok: false, message: "MCP 服务器配置无效" });
+				const candidate = item as Record<string, unknown>;
+				const id = String(candidate.id ?? "").trim();
+				const name = String(candidate.name ?? "").trim();
+				const transport = candidate.transport;
+				if (!/^[a-zA-Z0-9_-]{1,48}$/.test(id) || ids.has(id) || !name || name.length > 100) return json(res, 400, { ok: false, message: "MCP 服务器 ID 需唯一且仅包含字母、数字、下划线或短横线，名称不能为空" });
+				ids.add(id);
+				if (transport !== "stdio" && transport !== "http") return json(res, 400, { ok: false, message: `MCP 服务器 ${name} 的传输类型无效` });
+				if (transport === "stdio") {
+					const command = String(candidate.command ?? "").trim();
+					const args = candidate.args;
+					if (!command || command.length > 500 || (args !== undefined && (!Array.isArray(args) || args.some((arg) => typeof arg !== "string" || arg.length > 2000)))) return json(res, 400, { ok: false, message: `MCP 服务器 ${name} 的命令或参数无效` });
+					servers.push({ id, name, transport, command, args: (args as string[] | undefined) ?? [], enabled: candidate.enabled === true });
+				} else {
+					const rawUrl = String(candidate.url ?? "").trim();
+					let parsed: URL;
+					try { parsed = new URL(rawUrl); } catch { return json(res, 400, { ok: false, message: `MCP 服务器 ${name} 的 URL 无效` }); }
+					if (parsed.protocol !== "https:" || parsed.username || parsed.password) return json(res, 400, { ok: false, message: `MCP 服务器 ${name} 必须使用不含内嵌凭据的 HTTPS URL` });
+					servers.push({ id, name, transport, url: parsed.toString(), enabled: candidate.enabled === true });
+				}
+			}
+			config.mcpServers = servers;
+			if (typeof input.mcpEnabled === "boolean") config.tools.mcpEnabled = input.mcpEnabled;
+			mcpRuntime.setGlobalToolsEnabled(config.tools.mcpEnabled);
+			await mcpRuntime.replace(servers);
+			await saveConfig();
+			rebuildAgentSessions();
+			log("INFO", `MCP 服务器配置已更新（${servers.filter((server) => server.enabled).length} 个启用）`);
+			return json(res, 200, { ok: true, mcpEnabled: config.tools.mcpEnabled, servers: mcpRuntime.getStatuses() });
 		}
 		if (url.pathname === "/api/proactive-gate" && req.method === "GET") return json(res, 200, { proactiveGate: config.proactiveGate, providers: config.providers.filter((item) => item.enabled && item.apiKey).map(({ id, name, models }) => ({ id, name, models: models.map(({ id: modelId, name: modelName }) => ({ id: modelId, name: modelName })) })) });
 		if (url.pathname === "/api/proactive-decisions" && req.method === "GET") return json(res, 200, { metrics: proactiveMetrics, sentToday: proactiveUsage.date === localDateKey() ? proactiveUsage.sent : 0, decisions: proactiveDecisions });
@@ -579,10 +655,45 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
 			const submittedKeys = typeof search.apiKeys === "object" && search.apiKeys !== null ? search.apiKeys as Record<string, unknown> : {};
 			const apiKeys = { ...config.tools.webSearch.apiKeys };
 			for (const name of ["tavily", "brave", "exa", "serper"] as const) if (typeof submittedKeys[name] === "string" && submittedKeys[name]) apiKeys[name] = submittedKeys[name] as string;
-			config.tools = { enabled: [...new Set(input.enabled as string[])], webSearch: { provider: (provider as WebSearchProvider | undefined) ?? config.tools.webSearch.provider, apiKeys } };
+			const previousSkillsEnabled = config.tools.skillsEnabled;
+			const mcpEnabled = input.mcpEnabled === undefined ? config.tools.mcpEnabled : input.mcpEnabled === true;
+			const skillsEnabled = input.skillsEnabled === undefined ? config.tools.skillsEnabled : input.skillsEnabled === true;
+			config.tools = { enabled: [...new Set(input.enabled as string[])], mcpEnabled, skillsEnabled, webSearch: { provider: (provider as WebSearchProvider | undefined) ?? config.tools.webSearch.provider, apiKeys } };
 			await saveConfig();
+			if (skillsEnabled !== previousSkillsEnabled) rebuildAgentSessions();
+			if (mcpEnabled !== mcpRuntime.getGlobalToolsEnabled()) {
+				mcpRuntime.setGlobalToolsEnabled(mcpEnabled);
+				rebuildAgentSessions();
+			}
 			applyToolSettings();
-			return json(res, 200, { ok: true, tools: toolCatalog.map((tool) => ({ ...tool, enabled: config.tools.enabled.includes(tool.name) })), webSearch: { provider: config.tools.webSearch.provider, configuredProviders: Object.fromEntries(Object.entries(apiKeys).map(([name, key]) => [name, Boolean(key)])) } });
+			return json(res, 200, { ok: true, tools: toolCatalog.map((tool) => ({ ...tool, enabled: config.tools.enabled.includes(tool.name) })), mcpEnabled: config.tools.mcpEnabled, skillsEnabled: config.tools.skillsEnabled, webSearch: { provider: config.tools.webSearch.provider, configuredProviders: Object.fromEntries(Object.entries(apiKeys).map(([name, key]) => [name, Boolean(key)])) } });
+		}
+		if (url.pathname === "/api/skills" && req.method === "GET") return json(res, 200, { skills: listInstalledSkills(agentDir), enabled: config.tools.skillsEnabled });
+		if (url.pathname === "/api/skills" && req.method === "POST") {
+			const input = await body(req);
+			if (typeof input.sourceUrl !== "string" || input.sourceUrl.length > 2000) return json(res, 400, { ok: false, message: "请提供有效的 GitHub 技能目录链接" });
+			try {
+				const skill = await installSkillFromGitHub(agentDir, input.sourceUrl);
+				if (config.tools.skillsEnabled) rebuildAgentSessions();
+				return json(res, 201, { ok: true, skill, skills: listInstalledSkills(agentDir) });
+			} catch (error) { return json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) }); }
+		}
+		if (url.pathname === "/api/skills/import" && req.method === "POST") {
+			if (!req.headers["content-type"]?.toLowerCase().includes("application/zip")) return json(res, 415, { ok: false, message: "请上传 ZIP 文件" });
+			try {
+				const archive = await binaryBody(req, 20_000_000);
+				const skill = await installSkillFromZip(agentDir, archive);
+				if (config.tools.skillsEnabled) rebuildAgentSessions();
+				return json(res, 201, { ok: true, skill, skills: listInstalledSkills(agentDir) });
+			} catch (error) { return json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) }); }
+		}
+		const skillMatch = url.pathname.match(/^\/api\/skills\/([^/]+)$/);
+		if (skillMatch && req.method === "DELETE") {
+			try {
+				await removeInstalledSkill(agentDir, decodeURIComponent(skillMatch[1]!));
+				if (config.tools.skillsEnabled) rebuildAgentSessions();
+				return json(res, 200, { ok: true, skills: listInstalledSkills(agentDir) });
+			} catch (error) { return json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) }); }
 		}
 		if (url.pathname === "/api/personas" && req.method === "GET") return json(res, 200, { personas: config.personas, activePersonaId: config.activePersonaId });
 		if (url.pathname === "/api/personas" && req.method === "POST") {
@@ -720,6 +831,8 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
 
 await loadConfig();
 await loadRuntimeData();
+mcpRuntime.setGlobalToolsEnabled(config.tools.mcpEnabled);
+await mcpRuntime.replace(config.mcpServers);
 const activeBot = config.qqBots.find((bot) => bot.enabled);
 if (activeBot?.appId && activeBot.appSecret) void connectQQ(activeBot);
 log("INFO", "Miubot Server 已启动");
