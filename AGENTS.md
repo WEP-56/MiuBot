@@ -23,7 +23,7 @@ packages/
 ## 快速入口
 
 - 项目概览与开发命令：`README.md`
-- 服务端说明与启动：`apps/server/README.md`；`apps/server/src/index.ts` 是进程入口，`apps/server/src/runtime.ts` 是运行时组合根，负责初始化与连接各模块。业务能力、模型路由和工具实现由对应 Package 持有，Server 只负责装配与调用。
+- 服务端说明与启动：`apps/server/README.md`；`apps/server/src/index.ts` 是进程入口与应用组合根，负责启动流程、HTTP 路由和 QQ 消息处理；`apps/server/src/agent-host.ts` 装配 AgentSession、扩展和工具授权；`apps/server/src/runtime.ts` 提供配置类型、默认值及通用模型请求逻辑。
 - Web 工作台说明与启动：`apps/web/README.md`；React 入口是 `apps/web/src/App.tsx`
 - Pi 迁移边界：`docs/10-技术架构/04-Pi移植记录.md`
 - 当前产品进度：`docs/00-产品与全局/03-路线图.md`
@@ -38,7 +38,7 @@ packages/
 ## Tools、Plugin 与宿主边界
 
 - 所有可由模型调用的内置 Tool 定义统一放在 `packages/plugin/src/tools/`，包括 schema、描述、promptSnippet 和执行逻辑；不要在 `apps/server` 定义或实现 Tool。
-- `apps/server` 是 Plugin/Agent 的宿主与组合根：负责读取配置、执行全局/对象级授权，并通过参数、接口或回调向 Tool 注入凭据、存储和平台发送能力。Tool 包不得导入 `apps/server`。
+- `apps/server` 是 Plugin/Agent 的宿主与组合根：负责读取配置、执行全局/对象级授权，并通过参数、接口或回调向 Tool 注入凭据、存储和平台发送能力。QQ 专属消息流程与管理 API 也属于应用层。Tool 包不得导入 `apps/server`。
 - MCP 协议客户端属于 `packages/mcp`；与 Pi Extension ToolDefinition 的桥接、连接生命周期及 Agent 工具注册属于 `packages/plugin/src/tools/mcp`。服务端只维护用户配置 API 和是否启用的宿主策略。
 - 平台 I/O、业务数据存储、后台任务与管理 API 不因被某个 Tool 使用就自动归入 `plugin`；它们由所属 package 实现，再由宿主注入 Tool。保持模型可调用入口和底层服务的边界清晰。
 - 扩展生命周期、Hook、Tool 注册与权限能力归 `packages/plugin`。Pi 扩展中的 TUI 能力不得直接作为 Miubot WebUI API；新增 WebUI 扩展点须定义宿主可控的 Web 契约和权限。
@@ -48,7 +48,7 @@ packages/
 
 新增功能前，先根据职责确定所属模块，不要仅根据现有调用链或文件位置选择实现位置。
 
-- apps/server：进程启动、HTTP/WS、平台接入装配、依赖注入。
+- apps/server：进程启动、HTTP/WS、平台接入装配、依赖注入，以及 QQ 专属的应用流程。
 - packages/plugin：Agent Tools、插件注册、扩展生命周期、工具执行入口。
 - packages/session：会话生命周期、Agent 实例管理、模型选择与运行时协调。
 - packages/context：消息转换、上下文组装、压缩、提示词与技能内容。
@@ -57,7 +57,7 @@ packages/
 
 ### 必须遵守
 
-1. Server 是组合根，不是业务逻辑的默认存放位置。
+1. Server 是组合根；通用领域能力优先由对应 Package 持有，平台专属流程可以留在 Server。
 2. 新增内置 Agent Tool 必须通过 Plugin Core 注册，不得在 Server 实现或复制 Tool 定义。
 3. Tool 使用的底层服务不必属于 Plugin，应根据业务职责归属并通过接口注入。
 4. 工具执行必须经过统一权限检查，不能因调用来源不同而绕过授权。

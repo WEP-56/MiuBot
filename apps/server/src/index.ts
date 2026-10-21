@@ -5,16 +5,12 @@ import { fileURLToPath } from "node:url";
 import { QQBot, type QQBotInboundMessage } from "@tencent-connect/qqbot-nodejs";
 import { startQrConnect, type QrConnectCredentials } from "@tencent-connect/qqbot-connector";
 import QRCode from "qrcode";
-import { createBuiltinTools, installSkillFromGitHub, installSkillFromZip, listInstalledSkills, McpRuntime, removeInstalledSkill, type McpServerConfig } from "@miubot/plugin/tools/index";
-import { createAgentSession } from "@miubot/session/sdk";
-import type { AgentSession } from "@miubot/session/agent-session";
-import { DefaultResourceLoader } from "@miubot/session/resource-loader";
-import { ModelRuntime } from "@miubot/session/model-runtime";
-import { SessionManager } from "@miubot/session/session-manager";
-import { downloadImage, prepareInboundMedia, sendQQMedia } from "./media.ts";
+import { installSkillFromGitHub, installSkillFromZip, listInstalledSkills, McpRuntime, removeInstalledSkill, type McpServerConfig } from "@miubot/plugin/tools/index";
+import { downloadImage, prepareInboundMedia } from "./media.ts";
 import { collectInboundStickers } from "./sticker-collection.ts";
 import { tagStickerImage } from "./sticker-tagger.ts";
-import { extensionForMime, StickerStore, type Sticker } from "./stickers.ts";
+import { StickerStore } from "./stickers.ts";
+import { createAgentHost, type PeerConfig, type RuntimeMessage, type RuntimeSession } from "./agent-host.ts";
 import { createChatCompletion, createDefaultConfig, evaluateProactiveGate, type AppConfig, type ChatMessage, type ModelConfig, type PersonaConfig, type ProviderConfig, type QqBotConfig, type WebSearchProvider } from "./runtime.ts";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -25,8 +21,6 @@ const peerConfigsPath = join(dataDir, "peer-configs.json");
 const proactiveUsagePath = join(dataDir, "proactive-usage.json");
 const logsPath = join(dataDir, "runtime.log");
 const agentDir = join(dataDir, "agent");
-const agentSessions = new Map<string, AgentSession>();
-let modelRuntime: ModelRuntime | undefined;
 const port = Number(process.env.MIUBOT_PORT ?? 8787);
 
 let config: AppConfig = createDefaultConfig();
@@ -36,14 +30,22 @@ const stickerTagAttempts = new Map<string, number>();
 let stickerTagTimer: ReturnType<typeof setTimeout> | undefined;
 let activeStickerTag: { stickerId: string; controller: AbortController } | undefined;
 let conversationActivityVersion = 0;
-type RuntimeMessage = { role: "user" | "assistant"; content: string; sender?: string; timestamp: string };
-type RuntimeSession = { id: string; scope: "group" | "c2c"; peerId: string; peerName: string; botId: string; title: string; personaId: string; personaName: string; personaPrompt: string; providerId: string; modelId: string; summary: string; compactedThrough: number; messages: RuntimeMessage[]; createdAt: string; updatedAt: string; active: boolean };
-type PeerConfig = { botId: string; scope: "group" | "c2c"; peerId: string; name: string; personaId: string; providerId: string; modelId: string; useTools: boolean; features: { activeReply: boolean; stickers: boolean; imageGeneration: boolean; tts: boolean } };
 type RuntimeLog = { time: string; level: "INFO" | "WARN" | "ERROR"; sessionId?: string; text: string };
 const stickerSendContexts = new Map<string, { bot: QQBot; target: QQBotInboundMessage["replyTarget"] }>();
 const sessionPromptContexts = new Map<string, string>();
 let sessions: RuntimeSession[] = [];
 let peerConfigs: PeerConfig[] = [];
+const agentHost = createAgentHost({
+	dataDir,
+	agentDir,
+	getConfig: () => config,
+	getPeerConfig,
+	getPromptContext: (sessionId) => sessionPromptContexts.get(sessionId),
+	getStickerContext: (sessionId) => stickerSendContexts.get(sessionId),
+	getSessions: () => sessions,
+	stickerStore,
+	mcpRuntime,
+});
 let runtimeLogs: RuntimeLog[] = [];
 let proactiveUsage = { date: "", sent: 0 };
 const proactiveMetrics = { groupMessagesReceived: 0, candidates: 0, judgments: 0, planned: 0, sent: 0, blocked: 0 };
@@ -196,34 +198,30 @@ function scheduleStickerTagging(delayMs = 5_000): void {
 	}, delayMs);
 }
 
-function anyAgentLoopRunning(): boolean {
-	return [...agentSessions.values()].some((session) => session.isStreaming);
-}
-
 async function runNextStickerTag(): Promise<void> {
 	if (activeStickerTag) return;
 	const activityVersion = conversationActivityVersion;
-	if (anyAgentLoopRunning()) { scheduleStickerTagging(30_000); return; }
+	if (agentHost.anyAgentLoopRunning()) { scheduleStickerTagging(30_000); return; }
 	const provider = config.providers.find((item) => item.id === config.tools.stickerTaggerProviderId && item.enabled && item.apiKey);
 	const modelConfig = provider?.models.find((item) => item.id === config.tools.stickerTaggerModelId && item.supportsVision);
 	if (!provider || !modelConfig) return;
 	const sticker = (await stickerStore.list()).find((item) => item.status === "pending" && !item.description && item.tags.length === 0 && (stickerTagAttempts.get(item.id) ?? 0) < 3);
 	if (!sticker) return;
-	if (activityVersion !== conversationActivityVersion || anyAgentLoopRunning()) { scheduleStickerTagging(30_000); return; }
+	if (activityVersion !== conversationActivityVersion || agentHost.anyAgentLoopRunning()) { scheduleStickerTagging(30_000); return; }
 	const controller = new AbortController();
 	activeStickerTag = { stickerId: sticker.id, controller };
 	const loopMonitor = setInterval(() => {
-		if (anyAgentLoopRunning()) controller.abort();
+		if (agentHost.anyAgentLoopRunning()) controller.abort();
 	}, 250);
 	try {
 		const bytes = await stickerStore.image(sticker.id);
 		if (!bytes) throw new Error("表情包文件不存在");
-		const model = await getPiModel(provider, modelConfig);
-		if (controller.signal.aborted || activityVersion !== conversationActivityVersion || anyAgentLoopRunning()) {
+		const model = await agentHost.getPiModel(provider, modelConfig);
+		if (controller.signal.aborted || activityVersion !== conversationActivityVersion || agentHost.anyAgentLoopRunning()) {
 			controller.abort();
 			return;
 		}
-		const annotation = await tagStickerImage(modelRuntime!, model, bytes, sticker.mimeType, controller.signal);
+		const annotation = await tagStickerImage(await agentHost.getModelRuntime(), model, bytes, sticker.mimeType, controller.signal);
 		if (controller.signal.aborted) return;
 		const current = await stickerStore.get(sticker.id);
 		if (current?.status === "pending" && !current.description && current.tags.length === 0) {
@@ -276,98 +274,6 @@ const toolCatalog = [
 	{ name: "ls", label: "列出目录", description: "查看工作区目录内容。" },
 ];
 function enabledTools(): string[] { return config.tools.enabled.filter((name) => toolNames.includes(name)); }
-
-function enabledToolNames(): string[] {
-	return [...enabledTools(), ...(config.tools.skillsEnabled ? ["load_skill"] : []), ...(config.tools.stickersEnabled ? ["search_stickers", "send_sticker"] : []), ...mcpRuntime.getEnabledToolDefinitions().map((tool) => tool.name)];
-}
-
-function applyToolSettings(): void {
-	for (const [sessionId, session] of agentSessions) {
-		const runtimeSession = sessions.find((item) => item.id === sessionId);
-		const peerConfig = runtimeSession && getPeerConfig(runtimeSession.scope, runtimeSession.peerId, runtimeSession.botId);
-		session.setActiveToolsByName(peerConfig?.useTools === false ? [] : enabledToolNames().filter((name) => name !== "search_stickers" && name !== "send_sticker" || peerConfig?.features.stickers === true));
-	}
-}
-
-function rebuildAgentSessions(): void {
-	for (const session of agentSessions.values()) session.dispose();
-	agentSessions.clear();
-}
-
-async function getPiModel(provider: ProviderConfig, modelConfig: ModelConfig) {
-	modelRuntime ??= await ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: null, refreshOnCreate: false });
-	modelRuntime.registerProvider(provider.id, {
-		name: provider.name,
-		baseUrl: provider.baseUrl,
-		apiKey: provider.apiKey,
-		models: [{ id: modelConfig.id, name: modelConfig.name || modelConfig.id, api: modelConfig.api as "openai-completions", input: modelConfig.supportsVision ? ["text", "image"] : ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, reasoning: modelConfig.supportsThinking, contextWindow: modelConfig.maxContext, maxTokens: modelConfig.maxOutput }],
-	});
-	if (provider.apiKey) await modelRuntime.setRuntimeApiKey(provider.id, provider.apiKey);
-	const model = modelRuntime.getModel(provider.id, modelConfig.id);
-	if (!model) throw new Error(`无法在 Pi ModelRuntime 中注册模型 ${provider.id}/${modelConfig.id}`);
-	return model;
-}
-
-function applyPeerConfigToSession(session: RuntimeSession, peer: PeerConfig | undefined): void {
-	if (!peer) return;
-	const persona = config.personas.find((item) => item.id === peer.personaId);
-	session.peerName = peer.name;
-	session.personaId = persona?.id ?? session.personaId;
-	session.personaName = persona?.name ?? session.personaName;
-	session.personaPrompt = persona?.systemPrompt ?? session.personaPrompt;
-	session.providerId = peer.providerId;
-	session.modelId = peer.modelId;
-}
-
-async function getAgentSession(runtimeSession: RuntimeSession): Promise<AgentSession> {
-	applyPeerConfigToSession(runtimeSession, getPeerConfig(runtimeSession.scope, runtimeSession.peerId, runtimeSession.botId));
-	const provider = config.providers.find((item) => item.id === runtimeSession.providerId && item.enabled && item.apiKey);
-	const modelConfig = provider?.models.find((item) => item.id === runtimeSession.modelId);
-	if (!provider || !modelConfig) throw new Error("该会话使用的模型已不可用，请创建新会话或更新对象配置");
-	const model = await getPiModel(provider, modelConfig);
-	const existing = agentSessions.get(runtimeSession.id);
-	if (existing) {
-		if (existing.model?.provider !== model.provider || existing.model.id !== model.id) await existing.setModel(model);
-		const peerConfig = getPeerConfig(runtimeSession.scope, runtimeSession.peerId, runtimeSession.botId);
-		existing.setActiveToolsByName(peerConfig?.useTools === false ? [] : enabledToolNames().filter((name) => name !== "search_stickers" && name !== "send_sticker" || peerConfig?.features.stickers === true));
-		return existing;
-	}
-	const customTools = createBuiltinTools({
-		webSearch: () => config.tools.webSearch,
-		...(config.tools.skillsEnabled ? { skills: { cwd: dataDir, agentDir } } : {}),
-		...(config.tools.stickersEnabled ? { stickers: { store: stickerStore, canUse: () => {
-			const latestPeer = getPeerConfig(runtimeSession.scope, runtimeSession.peerId, runtimeSession.botId);
-			return config.tools.stickersEnabled && latestPeer?.useTools !== false && latestPeer?.features.stickers === true;
-		}, send: async (sticker: Sticker) => {
-				const context = stickerSendContexts.get(runtimeSession.id);
-				if (!context) throw new Error("当前没有可用的 QQ 回复目标");
-				const image = await stickerStore.image(sticker.id);
-				if (!image) throw new Error("表情包文件不存在");
-				const extension = extensionForMime(sticker.mimeType);
-				await sendQQMedia(context.bot, context.target, { kind: "image", buffer: image, fileName: `${sticker.id}${extension}` });
-		} } } : {}), mcp: mcpRuntime,
-	});
-			const resourceLoader = new DefaultResourceLoader({ cwd: dataDir, agentDir, skillsOverride: (base) => ({ ...base, skills: config.tools.skillsEnabled ? base.skills : [] }), extensionFactories: [{ name: "miubot-qq-scene", factory: (pi) => {
-				pi.on("before_agent_start", (event) => {
-					const peer = getPeerConfig(runtimeSession.scope, runtimeSession.peerId, runtimeSession.botId);
-					const persona = config.personas.find((item) => item.id === peer?.personaId);
-					const botName = config.qqBots.find((item) => item.id === runtimeSession.botId)?.nickname ?? "MiuBot";
-					const scene = `当前 QQ 对话环境：${runtimeSession.scope === "group" ? "群聊" : "私聊"}；${runtimeSession.scope === "group" ? "群" : "对象"}名称：${peer?.name ?? runtimeSession.peerName}；平台对象 ID（OpenID）：${runtimeSession.peerId}；Bot：${botName}（${runtimeSession.botId}）。${sessionPromptContexts.get(runtimeSession.id) ?? ""}`;
-					const personaPrompt = persona?.systemPrompt ?? runtimeSession.personaPrompt;
-					const prior = runtimeSession.messages.slice(runtimeSession.compactedThrough).slice(-20).map((item) => `${item.role === "user" ? item.sender ?? "用户" : "助手"}: ${item.content}`).join("\n");
-					const history = [runtimeSession.summary ? `此前会话摘要：\n${runtimeSession.summary}` : "", prior ? `此前对话记录：\n${prior}` : ""].filter(Boolean).join("\n\n");
-					const configured = [personaPrompt ? `当前对象人格设定：\n${personaPrompt}` : "", scene, history].filter(Boolean).join("\n\n");
-					event.systemPromptOptions.appendSystemPrompt = [event.systemPromptOptions.appendSystemPrompt, configured].filter(Boolean).join("\n\n");
-				});
-			} }] });
-			await resourceLoader.reload();
-			const created = await createAgentSession({ cwd: dataDir, agentDir, modelRuntime, model, customTools, resourceLoader, sessionManager: SessionManager.inMemory(dataDir) });
-	const session = created.session;
-	const peerConfig = getPeerConfig(runtimeSession.scope, runtimeSession.peerId, runtimeSession.botId);
-	session.setActiveToolsByName(peerConfig?.useTools === false ? [] : enabledToolNames().filter((name) => name !== "search_stickers" && name !== "send_sticker" || peerConfig?.features.stickers === true));
-	agentSessions.set(runtimeSession.id, session);
-	return session;
-}
 
 function localDateKey(date = new Date()): string {
 	return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -471,7 +377,7 @@ async function evaluateActiveReplyWindow(key: string): Promise<void> {
 	if (!config.proactiveGate.enabled || !currentPeerConfig?.features.activeReply || !session.active || !await checkActiveReplyGate(groupId, true) || Date.now() - (activeReplyCooldowns.get(cooldownKey) ?? 0) < config.proactiveGate.cooldownMinutes * 60_000) { log("INFO", `智能插话发送前复核拦截：${groupId}`, session.id); return; }
 	const prompt = `群聊话题：${decision.topic ?? "最近讨论"}\n以下是刚刚聚合到的群聊消息：\n${transcript}\n请自然、简洁地参与讨论。不要提及你在分析是否插话，也不要复述整段消息。`;
 	try {
-		const agentSession = await getAgentSession(session);
+		const agentSession = await agentHost.getAgentSession(session);
 		stickerSendContexts.set(session.id, { bot, target: { scope: "group", targetId: groupId } });
 		sessionPromptContexts.set(session.id, `本次待处理群消息包含以下发言人及平台 ID：\n${messages.map((message) => `${message.sender}（${message.senderId}）`).join("\n")}`);
 		try { await agentSession.prompt(prompt); } finally { stickerSendContexts.delete(session.id); sessionPromptContexts.delete(session.id); }
@@ -534,15 +440,15 @@ async function processQQMessage(bot: QQBot, botConfig: QqBotConfig, message: QQB
 			return;
 		}
 		if (!session) { session = createSession(isGroup ? "group" : "c2c", peerId, peerName, botConfig.id); await saveSessions(); log("INFO", `首次消息创建会话：${peerName} (${isGroup ? "群聊" : "私聊"})`, session.id); }
-		applyPeerConfigToSession(session, peerConfig);
+		agentHost.applyPeerConfigToSession(session, peerConfig);
 		if (text === "/compact" && !hasAttachments) {
 			if (session.messages.length < 2) { await bot.sendText(message.replyTarget, "当前会话内容较少，暂时不需要压缩。"); return; }
-			const agentSession = await getAgentSession(session);
+			const agentSession = await agentHost.getAgentSession(session);
 			const compacted = await agentSession.compact("Summarize the conversation, preserving facts, preferences, decisions, and unfinished tasks.");
 			session.summary = compacted.summary; session.compactedThrough = Math.max(0, session.messages.length - 4); session.updatedAt = new Date().toISOString(); await saveSessions();
 			log("INFO", "上下文已压缩", session.id); await bot.sendText(message.replyTarget, "上下文压缩完成。"); return;
 		}
-		const agentSession = await getAgentSession(session);
+		const agentSession = await agentHost.getAgentSession(session);
 		const provider = config.providers.find((item) => item.id === session.providerId);
 		const modelConfig = provider?.models.find((item) => item.id === session.modelId);
 		const media = await prepareInboundMedia(message, { supportsVision: modelConfig?.supportsVision === true });
@@ -741,7 +647,7 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
 			mcpRuntime.setGlobalToolsEnabled(config.tools.mcpEnabled);
 			await mcpRuntime.replace(servers);
 			await saveConfig();
-			rebuildAgentSessions();
+			agentHost.rebuildAgentSessions();
 			log("INFO", `MCP 服务器配置已更新（${servers.filter((server) => server.enabled).length} 个启用）`);
 			return json(res, 200, { ok: true, mcpEnabled: config.tools.mcpEnabled, servers: mcpRuntime.getStatuses() });
 		}
@@ -786,12 +692,12 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
 			const stickersEnabled = input.stickersEnabled === undefined ? config.tools.stickersEnabled : input.stickersEnabled === true;
 			config.tools = { enabled: [...new Set(input.enabled as string[])], mcpEnabled, skillsEnabled, stickersEnabled, stickerAutoCollectProbability: config.tools.stickerAutoCollectProbability, stickerTaggerProviderId: config.tools.stickerTaggerProviderId, stickerTaggerModelId: config.tools.stickerTaggerModelId, webSearch: { provider: (provider as WebSearchProvider | undefined) ?? config.tools.webSearch.provider, apiKeys } };
 			await saveConfig();
-			if (skillsEnabled !== previousSkillsEnabled || stickersEnabled !== previousStickersEnabled) rebuildAgentSessions();
+			if (skillsEnabled !== previousSkillsEnabled || stickersEnabled !== previousStickersEnabled) agentHost.rebuildAgentSessions();
 			if (mcpEnabled !== mcpRuntime.getGlobalToolsEnabled()) {
 				mcpRuntime.setGlobalToolsEnabled(mcpEnabled);
-				rebuildAgentSessions();
+				agentHost.rebuildAgentSessions();
 			}
-			applyToolSettings();
+			agentHost.applyToolSettings();
 			return json(res, 200, { ok: true, tools: toolCatalog.map((tool) => ({ ...tool, enabled: config.tools.enabled.includes(tool.name) })), mcpEnabled: config.tools.mcpEnabled, skillsEnabled: config.tools.skillsEnabled, stickersEnabled: config.tools.stickersEnabled, webSearch: { provider: config.tools.webSearch.provider, configuredProviders: Object.fromEntries(Object.entries(apiKeys).map(([name, key]) => [name, Boolean(key)])) } });
 		}
 		if (url.pathname === "/api/stickers" && req.method === "GET") return json(res, 200, {
@@ -860,7 +766,7 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
 			if (typeof input.sourceUrl !== "string" || input.sourceUrl.length > 2000) return json(res, 400, { ok: false, message: "请提供有效的 GitHub 技能目录链接" });
 			try {
 				const skill = await installSkillFromGitHub(agentDir, input.sourceUrl);
-				if (config.tools.skillsEnabled) rebuildAgentSessions();
+				if (config.tools.skillsEnabled) agentHost.rebuildAgentSessions();
 				return json(res, 201, { ok: true, skill, skills: listInstalledSkills(agentDir) });
 			} catch (error) { return json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) }); }
 		}
@@ -869,7 +775,7 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
 			try {
 				const archive = await binaryBody(req, 20_000_000);
 				const skill = await installSkillFromZip(agentDir, archive);
-				if (config.tools.skillsEnabled) rebuildAgentSessions();
+				if (config.tools.skillsEnabled) agentHost.rebuildAgentSessions();
 				return json(res, 201, { ok: true, skill, skills: listInstalledSkills(agentDir) });
 			} catch (error) { return json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) }); }
 		}
@@ -877,7 +783,7 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
 		if (skillMatch && req.method === "DELETE") {
 			try {
 				await removeInstalledSkill(agentDir, decodeURIComponent(skillMatch[1]!));
-				if (config.tools.skillsEnabled) rebuildAgentSessions();
+				if (config.tools.skillsEnabled) agentHost.rebuildAgentSessions();
 				return json(res, 200, { ok: true, skills: listInstalledSkills(agentDir) });
 			} catch (error) { return json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) }); }
 		}
@@ -926,10 +832,7 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
 			const index = peerConfigs.findIndex((item) => item.botId === botId && item.scope === scope && item.peerId === peerId);
 			if (index < 0) return json(res, 404, { ok: false, message: "对象不存在" });
 			peerConfigs.splice(index, 1);
-			for (const [sessionId, agentSession] of agentSessions) {
-				const runtimeSession = sessions.find((item) => item.id === sessionId);
-				if (runtimeSession?.botId === botId && runtimeSession.scope === scope && runtimeSession.peerId === peerId) { agentSession.dispose(); agentSessions.delete(sessionId); }
-			}
+			agentHost.disposePeer(botId, scope, peerId, sessions);
 			sessions = sessions.filter((item) => item.botId !== botId || item.scope !== scope || item.peerId !== peerId);
 			await savePeerConfigs(); await saveSessions();
 			return json(res, 200, { ok: true });
@@ -956,8 +859,8 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
 			const index = peerConfigs.findIndex((item) => item.scope === scope && item.peerId === peerId && item.botId === botId);
 			if (index >= 0) peerConfigs[index] = next; else peerConfigs.push(next);
 			await savePeerConfigs();
-			for (const session of sessions) if (session.scope === scope && session.peerId === peerId && session.botId === botId) { applyPeerConfigToSession(session, next); await saveSessions(); }
-			applyToolSettings();
+			for (const session of sessions) if (session.scope === scope && session.peerId === peerId && session.botId === botId) { agentHost.applyPeerConfigToSession(session, next); await saveSessions(); }
+			agentHost.applyToolSettings();
 			log("INFO", `已更新${scope === "group" ? "群聊" : "个人"}配置：${peerId}`);
 			return json(res, 200, { ok: true, config: next });
 		}
@@ -969,7 +872,7 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
 			if (scope !== "group" && scope !== "c2c") return json(res, 400, { ok: false, message: "对象类型无效" });
 			const peer = getPeerConfig(scope, peerId, botId);
 			if (!peer) return json(res, 404, { ok: false, message: "对象不存在" });
-			const session = createSession(scope, peerId, peer.name, botId); applyPeerConfigToSession(session, peer); await saveSessions();
+			const session = createSession(scope, peerId, peer.name, botId); agentHost.applyPeerConfigToSession(session, peer); await saveSessions();
 			return json(res, 201, { ok: true, session: publicSession(session) });
 		}
 		const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
@@ -982,7 +885,7 @@ async function handler(req: IncomingMessage, res: ServerResponse): Promise<void>
 			await saveSessions(); return json(res, 200, { session });
 		}
 		if (sessionMatch && req.method === "DELETE") {
-			const id = decodeURIComponent(sessionMatch[1] ?? ""); const session = sessions.find((item) => item.id === id); if (!session) return json(res, 404, { ok: false, message: "会话不存在" }); sessions = sessions.filter((item) => item.id !== id); agentSessions.get(id)?.dispose(); agentSessions.delete(id); await saveSessions(); return json(res, 200, { ok: true, remainingPeerSessions: sessions.filter((item) => item.botId === session.botId && item.scope === session.scope && item.peerId === session.peerId).length });
+			const id = decodeURIComponent(sessionMatch[1] ?? ""); const session = sessions.find((item) => item.id === id); if (!session) return json(res, 404, { ok: false, message: "会话不存在" }); sessions = sessions.filter((item) => item.id !== id); agentHost.disposeSession(id); await saveSessions(); return json(res, 200, { ok: true, remainingPeerSessions: sessions.filter((item) => item.botId === session.botId && item.scope === session.scope && item.peerId === session.peerId).length });
 		}
 		if (url.pathname === "/api/providers/models" && req.method === "POST") {
 			const input = await body(req);
