@@ -1,0 +1,46 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { HttpContext } from "./context.ts";
+import { handleChatRoutes } from "./routes/chat.ts";
+import { handleConfigRoutes } from "./routes/config.ts";
+import { handlePersonaRoutes } from "./routes/personas.ts";
+import { handleProactiveRoutes } from "./routes/proactive.ts";
+import { handleProviderRoutes } from "./routes/providers.ts";
+import { handleQqBotRoutes } from "./routes/qqbot.ts";
+import { handleSessionRoutes } from "./routes/sessions.ts";
+import { handleSkillRoutes } from "./routes/skills.ts";
+import { handleStickerRoutes } from "./routes/stickers.ts";
+import { handleSystemRoutes } from "./routes/system.ts";
+import { handleToolRoutes } from "./routes/tools.ts";
+
+type RouteHandler = (ctx: HttpContext, req: IncomingMessage, res: ServerResponse, url: URL) => Promise<boolean>;
+
+/**
+ * 路由表。顺序即匹配优先级：返回 `true` 表示已处理，不再继续。
+ *
+ * 新增管理端点在这里注册；认证、CORS、404 与错误边界由 `server.ts` 统一处理。
+ */
+const handlers: RouteHandler[] = [
+	handleSystemRoutes,
+	handleConfigRoutes,
+	handleToolRoutes,
+	handleProactiveRoutes,
+	handleStickerRoutes,
+	handleSkillRoutes,
+	handlePersonaRoutes,
+	handleSessionRoutes,
+	handleProviderRoutes,
+	handleQqBotRoutes,
+	handleChatRoutes,
+];
+
+export async function dispatch(
+	ctx: HttpContext,
+	req: IncomingMessage,
+	res: ServerResponse,
+	url: URL,
+): Promise<boolean> {
+	for (const handle of handlers) {
+		if (await handle(ctx, req, res, url)) return true;
+	}
+	return false;
+}

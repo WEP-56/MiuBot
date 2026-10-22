@@ -1,21 +1,17 @@
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createFileStorage, createPluginHost, type PluginHost } from "@miubot/plugin/host/index";
-import {
-	installSkillFromGitHub,
-	installSkillFromZip,
-	listInstalledSkills,
-	McpRuntime,
-	type McpServerConfig,
-	removeInstalledSkill,
-} from "@miubot/plugin/tools/index";
+import { McpRuntime } from "@miubot/plugin/tools/index";
 import { type QrConnectCredentials, startQrConnect } from "@tencent-connect/qqbot-connector";
 import { QQBot, type QQBotInboundMessage } from "@tencent-connect/qqbot-nodejs";
 import QRCode from "qrcode";
 import { createAgentHost, type PeerConfig, type RuntimeSession } from "./agent-host.ts";
 import { createApiSecurity, loadOrCreateAuthToken } from "./api-security.ts";
+import type { HttpContext } from "./http/context.ts";
+import { createRequestHandler } from "./http/server.ts";
+import { createRuntimeLogger, type RuntimeLog } from "./logging.ts";
 import { downloadImage, prepareInboundMedia } from "./media.ts";
 import { normalizeMessageEvent } from "./platform/events.ts";
 import { acceptInboundMessage, describeQuoteContext } from "./platform/inbound.ts";
@@ -25,20 +21,17 @@ import { attachQqBotEvents } from "./platform/qq-adapter.ts";
 import { createQqPlatform } from "./platform/runtime.ts";
 import {
 	type AppConfig,
-	type ChatMessage,
 	createChatCompletion,
 	createDefaultConfig,
 	evaluateProactiveGate,
-	type ImageProviderConfig,
 	type ModelConfig,
-	type PersonaConfig,
 	type ProviderConfig,
 	type QqBotConfig,
-	type WebSearchProvider,
 } from "./runtime.ts";
 import { collectInboundStickers } from "./sticker-collection.ts";
 import { tagStickerImage } from "./sticker-tagger.ts";
 import { StickerStore } from "./stickers.ts";
+import { localDateKey } from "./util/time.ts";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const dataDir = join(root, ".miubot");
@@ -70,7 +63,6 @@ const stickerTagAttempts = new Map<string, number>();
 let stickerTagTimer: ReturnType<typeof setTimeout> | undefined;
 let activeStickerTag: { stickerId: string; controller: AbortController } | undefined;
 let conversationActivityVersion = 0;
-type RuntimeLog = { time: string; level: "INFO" | "WARN" | "ERROR"; sessionId?: string; text: string };
 const stickerSendContexts = new Map<
 	string,
 	{ bot: QQBot; target: QQBotInboundMessage["replyTarget"]; channel: OutboundChannel }
@@ -89,7 +81,9 @@ const agentHost = createAgentHost({
 	stickerStore,
 	mcpRuntime,
 });
-let runtimeLogs: RuntimeLog[] = [];
+/** 运行日志：内存最近 1000 条 + `runtime.log` 追加写入。 */
+const logger = createRuntimeLogger({ filePath: logsPath, dir: dataDir });
+const log = logger.write;
 let proactiveUsage = { date: "", sent: 0 };
 const proactiveMetrics = { groupMessagesReceived: 0, candidates: 0, judgments: 0, planned: 0, sent: 0, blocked: 0 };
 const proactiveDecisions: Array<{ time: string; groupId: string; sessionId?: string; result: string; reason: string }> =
@@ -325,13 +319,15 @@ async function loadRuntimeData(): Promise<void> {
 		proactiveUsage = { date: "", sent: 0 };
 	}
 	try {
-		runtimeLogs = (await readFile(logsPath, "utf8"))
-			.split("\n")
-			.filter(Boolean)
-			.slice(-1000)
-			.map((line) => JSON.parse(line) as RuntimeLog);
+		logger.restore(
+			(await readFile(logsPath, "utf8"))
+				.split("\n")
+				.filter(Boolean)
+				.slice(-1000)
+				.map((line) => JSON.parse(line) as RuntimeLog),
+		);
 	} catch {
-		runtimeLogs = [];
+		logger.restore([]);
 	}
 }
 
@@ -353,21 +349,6 @@ async function savePeerConfigs(): Promise<void> {
 async function saveProactiveUsage(): Promise<void> {
 	await mkdir(dataDir, { recursive: true });
 	await writeFile(proactiveUsagePath, JSON.stringify(proactiveUsage, null, 2), "utf8");
-}
-
-function log(level: RuntimeLog["level"], text: string, sessionId?: string): void {
-	const entry: RuntimeLog = { time: new Date().toISOString(), level, text, ...(sessionId ? { sessionId } : {}) };
-	runtimeLogs.push(entry);
-	if (runtimeLogs.length > 1000) runtimeLogs = runtimeLogs.slice(-1000);
-	void mkdir(dataDir, { recursive: true }).then(() => appendFile(logsPath, `${JSON.stringify(entry)}\n`, "utf8"));
-	console[level === "ERROR" ? "error" : level === "WARN" ? "warn" : "info"](`[${level}] ${text}`);
-}
-
-function publicSession(
-	session: RuntimeSession,
-): Omit<RuntimeSession, "messages" | "summary"> & { messageCount: number; summaryConfigured: boolean } {
-	const { messages, summary, ...item } = session;
-	return { ...item, messageCount: messages.length, summaryConfigured: Boolean(summary) };
 }
 
 function getPeerConfig(scope: PeerConfig["scope"], peerId: string, botId: string): PeerConfig | undefined {
@@ -546,35 +527,6 @@ function createSession(
 		if (item.scope === scope && item.peerId === peerId && item.botId === botId) item.active = false;
 	sessions.unshift(session);
 	return session;
-}
-
-const nativeToolNames = ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"] as const;
-const toolNames = [...nativeToolNames, "web_search", "image_gen"];
-const toolCatalog = [
-	{
-		name: "web_search",
-		label: "网页搜索",
-		description: "使用 Tavily、Brave、Exa 或 Serper 搜索公开网页。",
-		configurable: true,
-	},
-	{
-		name: "image_gen",
-		label: "图像生成",
-		description: "按文字提示生成图片并发送到当前 QQ 对话。",
-		configurable: true,
-	},
-	{ name: "read", label: "读取文件", description: "读取工作区文件内容。" },
-	{ name: "bash", label: "Bash", description: "在服务器工作目录执行 Bash 命令。" },
-	{ name: "powershell", label: "PowerShell", description: "在服务器工作目录执行 PowerShell 命令。" },
-	{ name: "edit", label: "编辑文件", description: "对工作区文件进行局部修改。" },
-	{ name: "write", label: "写入文件", description: "创建或覆盖工作区文件。" },
-	{ name: "grep", label: "内容搜索", description: "在工作区文件中搜索文本。" },
-	{ name: "find", label: "查找文件", description: "按名称或模式查找工作区文件。" },
-	{ name: "ls", label: "列出目录", description: "查看工作区目录内容。" },
-];
-
-function localDateKey(date = new Date()): string {
-	return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 async function checkActiveReplyGate(groupId: string, notify: boolean): Promise<boolean> {
@@ -1105,55 +1057,6 @@ async function processQQMessage(bot: QQBot, botConfig: QqBotConfig, message: QQB
 	});
 }
 
-function headerValue(value: string | string[] | undefined): string | undefined {
-	return Array.isArray(value) ? value[0] : value;
-}
-
-function json(res: ServerResponse, status: number, body: unknown): void {
-	res.writeHead(status, {
-		"content-type": "application/json; charset=utf-8",
-		"cache-control": "no-store",
-	});
-	res.end(JSON.stringify(body));
-}
-
-async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
-	const chunks: Buffer[] = [];
-	for await (const chunk of req) chunks.push(Buffer.from(chunk));
-	if (chunks.length === 0) return {};
-	const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-}
-
-async function binaryBody(req: IncomingMessage, maxBytes: number): Promise<Uint8Array> {
-	const chunks: Buffer[] = [];
-	let size = 0;
-	for await (const chunk of req) {
-		const buffer = Buffer.from(chunk);
-		size += buffer.byteLength;
-		if (size > maxBytes) throw new Error("上传文件超过大小限制");
-		chunks.push(buffer);
-	}
-	return new Uint8Array(Buffer.concat(chunks));
-}
-
-function publicConfig(): {
-	qqBots: Array<Omit<QqBotConfig, "appSecret"> & { credentialsConfigured: boolean }>;
-	providers: Array<Omit<ProviderConfig, "apiKey"> & { apiKeyConfigured: boolean }>;
-	imageProviders: Array<Omit<ImageProviderConfig, "apiKey"> & { apiKeyConfigured: boolean }>;
-} {
-	const qqBots = config.qqBots.map(({ appSecret, ...bot }) => ({ ...bot, credentialsConfigured: Boolean(appSecret) }));
-	const providers = config.providers.map(({ apiKey, ...provider }) => ({
-		...provider,
-		apiKeyConfigured: Boolean(apiKey),
-	}));
-	const imageProviders = config.imageProviders.map(({ apiKey, ...provider }) => ({
-		...provider,
-		apiKeyConfigured: Boolean(apiKey),
-	}));
-	return { qqBots, providers, imageProviders };
-}
-
 async function testQQ(appId: string, appSecret: string): Promise<{ ok: boolean; message: string }> {
 	if (!appId || !appSecret) return { ok: false, message: "请填写 AppID 和 AppSecret" };
 	try {
@@ -1308,824 +1211,62 @@ function startQr(nickname: string): void {
 	);
 }
 
-async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
-	const origin = headerValue(req.headers.origin);
-	const corsOrigin = apiSecurity.corsOrigin(origin);
-	if (corsOrigin) {
-		// 只对白名单 Origin 回写 CORS 头；其余请求一个都不给，浏览器读不到响应体。
-		res.setHeader("access-control-allow-origin", corsOrigin);
-		res.setHeader("vary", "origin");
-	}
-	const pathname = (req.url ?? "/").split("?")[0] ?? "/";
-	const decision = apiSecurity.authorize({
-		method: req.method ?? "GET",
-		host: headerValue(req.headers.host),
-		origin,
-		authorization: headerValue(req.headers.authorization),
-		tokenHeader: headerValue(req.headers["x-miubot-token"]),
-		cookie: headerValue(req.headers.cookie),
-		secFetchSite: headerValue(req.headers["sec-fetch-site"]),
-		pathname,
-	});
-	if (!decision.ok) return json(res, decision.status, { ok: false, message: decision.message });
-	if (req.method === "OPTIONS") {
-		res.writeHead(204, {
-			"access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-			"access-control-allow-headers": "content-type,x-miubot-token",
-			"access-control-max-age": "600",
-		});
-		res.end();
-		return;
-	}
-	// 用固定 base 解析路径：`Host` 头已在上面校验，但仍不拿它拼 URL，避免解析期注入。
-	const url = new URL(req.url ?? "/", "http://127.0.0.1");
-	try {
-		if (url.pathname === "/api/health")
-			return json(res, 200, {
-				ok: true,
-				qq: [...qqStates.values()].find((state) => state.phase === "connected")?.phase ?? "disconnected",
-			});
-		// 工作台启动时换取会话 Cookie；令牌本身不返回给前端 JS，只存在于 HttpOnly Cookie 中。
-		if (url.pathname === "/api/auth/session" && req.method === "POST") {
-			res.setHeader("set-cookie", apiSecurity.sessionCookie());
-			return json(res, 200, { ok: true });
-		}
-		if (url.pathname === "/api/config" && req.method === "GET") return json(res, 200, publicConfig());
-		if (url.pathname === "/api/config" && req.method === "PUT") {
-			const next = await body(req);
-			const providers = Array.isArray(next.providers)
-				? (next.providers as Array<ProviderConfig & { apiKeyConfigured?: boolean }>)
-				: (config.providers as Array<ProviderConfig & { apiKeyConfigured?: boolean }>);
-			const imageProviders = Array.isArray(next.imageProviders)
-				? (next.imageProviders as Array<ImageProviderConfig & { apiKeyConfigured?: boolean }>)
-				: (config.imageProviders as Array<ImageProviderConfig & { apiKeyConfigured?: boolean }>);
-			config = {
-				...config,
-				providers: providers.map(({ apiKeyConfigured: _configured, ...provider }) => ({
-					...provider,
-					apiKey:
-						provider.apiKey || config.providers.find((existing) => existing.id === provider.id)?.apiKey || "",
-				})),
-				imageProviders: imageProviders.map(({ apiKeyConfigured: _configured, ...provider }) => ({
-					...provider,
-					apiKey:
-						provider.apiKey ||
-						config.imageProviders.find((existing) => existing.id === provider.id)?.apiKey ||
-						"",
-				})),
-			};
-			await saveConfig();
-			return json(res, 200, publicConfig());
-		}
-		if (url.pathname === "/api/tools" && req.method === "GET") {
-			return json(res, 200, {
-				tools: toolCatalog.map((tool) => ({ ...tool, enabled: config.tools.enabled.includes(tool.name) })),
-				mcpEnabled: config.tools.mcpEnabled,
-				skillsEnabled: config.tools.skillsEnabled,
-				stickersEnabled: config.tools.stickersEnabled,
-				webSearch: {
-					provider: config.tools.webSearch.provider,
-					configuredProviders: Object.fromEntries(
-						Object.entries(config.tools.webSearch.apiKeys).map(([name, key]) => [name, Boolean(key)]),
-					),
-				},
-			});
-		}
-		if (url.pathname === "/api/mcp" && req.method === "GET")
-			return json(res, 200, { mcpEnabled: config.tools.mcpEnabled, servers: mcpRuntime.getStatuses() });
-		if (url.pathname === "/api/mcp" && req.method === "PUT") {
-			const input = await body(req);
-			if (!Array.isArray(input.servers)) return json(res, 400, { ok: false, message: "MCP 服务器列表无效" });
-			const servers: McpServerConfig[] = [];
-			const ids = new Set<string>();
-			for (const item of input.servers) {
-				if (typeof item !== "object" || item === null)
-					return json(res, 400, { ok: false, message: "MCP 服务器配置无效" });
-				const candidate = item as Record<string, unknown>;
-				const id = String(candidate.id ?? "").trim();
-				const name = String(candidate.name ?? "").trim();
-				const transport = candidate.transport;
-				if (!/^[a-zA-Z0-9_-]{1,48}$/.test(id) || ids.has(id) || !name || name.length > 100)
-					return json(res, 400, {
-						ok: false,
-						message: "MCP 服务器 ID 需唯一且仅包含字母、数字、下划线或短横线，名称不能为空",
-					});
-				ids.add(id);
-				if (transport !== "stdio" && transport !== "http")
-					return json(res, 400, { ok: false, message: `MCP 服务器 ${name} 的传输类型无效` });
-				if (transport === "stdio") {
-					const command = String(candidate.command ?? "").trim();
-					const args = candidate.args;
-					if (
-						!command ||
-						command.length > 500 ||
-						(args !== undefined &&
-							(!Array.isArray(args) || args.some((arg) => typeof arg !== "string" || arg.length > 2000)))
-					)
-						return json(res, 400, { ok: false, message: `MCP 服务器 ${name} 的命令或参数无效` });
-					servers.push({
-						id,
-						name,
-						transport,
-						command,
-						args: (args as string[] | undefined) ?? [],
-						enabled: candidate.enabled === true,
-					});
-				} else {
-					const rawUrl = String(candidate.url ?? "").trim();
-					let parsed: URL;
-					try {
-						parsed = new URL(rawUrl);
-					} catch {
-						return json(res, 400, { ok: false, message: `MCP 服务器 ${name} 的 URL 无效` });
-					}
-					if (parsed.protocol !== "https:" || parsed.username || parsed.password)
-						return json(res, 400, { ok: false, message: `MCP 服务器 ${name} 必须使用不含内嵌凭据的 HTTPS URL` });
-					servers.push({ id, name, transport, url: parsed.toString(), enabled: candidate.enabled === true });
-				}
-			}
-			config.mcpServers = servers;
-			if (typeof input.mcpEnabled === "boolean") config.tools.mcpEnabled = input.mcpEnabled;
-			mcpRuntime.setGlobalToolsEnabled(config.tools.mcpEnabled);
-			await mcpRuntime.replace(servers);
-			await saveConfig();
-			agentHost.rebuildAgentSessions();
-			log("INFO", `MCP 服务器配置已更新（${servers.filter((server) => server.enabled).length} 个启用）`);
-			return json(res, 200, { ok: true, mcpEnabled: config.tools.mcpEnabled, servers: mcpRuntime.getStatuses() });
-		}
-		if (url.pathname === "/api/proactive-gate" && req.method === "GET")
-			return json(res, 200, {
-				proactiveGate: config.proactiveGate,
-				providers: config.providers
-					.filter((item) => item.enabled && item.apiKey)
-					.map(({ id, name, models }) => ({
-						id,
-						name,
-						models: models.map(({ id: modelId, name: modelName }) => ({ id: modelId, name: modelName })),
-					})),
-			});
-		if (url.pathname === "/api/proactive-decisions" && req.method === "GET")
-			return json(res, 200, {
-				metrics: proactiveMetrics,
-				sentToday: proactiveUsage.date === localDateKey() ? proactiveUsage.sent : 0,
-				decisions: proactiveDecisions,
-			});
-		if (url.pathname === "/api/proactive-gate" && req.method === "PUT") {
-			const input = await body(req);
-			const dailyMessageLimit =
-				input.dailyMessageLimit === undefined
-					? config.proactiveGate.dailyMessageLimit
-					: Number(input.dailyMessageLimit);
-			const aggregationSeconds =
-				input.aggregationSeconds === undefined
-					? config.proactiveGate.aggregationSeconds
-					: Number(input.aggregationSeconds);
-			const cooldownMinutes =
-				input.cooldownMinutes === undefined ? config.proactiveGate.cooldownMinutes : Number(input.cooldownMinutes);
-			const probabilityPercent =
-				input.probabilityPercent === undefined
-					? config.proactiveGate.probabilityPercent
-					: Number(input.probabilityPercent);
-			const quietStart = String(input.quietStart ?? config.proactiveGate.quietStart);
-			const quietEnd = String(input.quietEnd ?? config.proactiveGate.quietEnd);
-			if (!Number.isInteger(dailyMessageLimit) || dailyMessageLimit < 0 || dailyMessageLimit > 100000)
-				return json(res, 400, { ok: false, message: "每日消息上限需为 0 到 100000 的整数" });
-			if (
-				!Number.isInteger(aggregationSeconds) ||
-				aggregationSeconds < 3 ||
-				aggregationSeconds > 60 ||
-				!Number.isInteger(cooldownMinutes) ||
-				cooldownMinutes < 0 ||
-				cooldownMinutes > 1440
-			)
-				return json(res, 400, { ok: false, message: "聚合窗口需为 3 到 60 秒，冷却需为 0 到 1440 分钟" });
-			if (!Number.isInteger(probabilityPercent) || probabilityPercent < 1 || probabilityPercent > 100)
-				return json(res, 400, { ok: false, message: "抽样概率需为 1 到 100%" });
-			const mode = input.mode === undefined ? config.proactiveGate.mode : input.mode;
-			if (mode !== "smart" && mode !== "probability") return json(res, 400, { ok: false, message: "插话模式无效" });
-			if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(quietStart) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(quietEnd))
-				return json(res, 400, { ok: false, message: "请填写有效的静默时段" });
-			const judgeProviderId = String(input.judgeProviderId ?? config.proactiveGate.judgeProviderId);
-			const judgeModelId = String(input.judgeModelId ?? config.proactiveGate.judgeModelId);
-			const enabled = input.enabled === undefined ? config.proactiveGate.enabled : input.enabled === true;
-			if (
-				enabled &&
-				mode === "smart" &&
-				!config.providers.some(
-					(item) =>
-						item.id === judgeProviderId &&
-						item.enabled &&
-						item.apiKey &&
-						item.models.some((model) => model.id === judgeModelId),
-				)
-			)
-				return json(res, 400, { ok: false, message: "智能判断模式需选择已配置的判断模型" });
-			config.proactiveGate = {
-				enabled,
-				mode,
-				probabilityPercent,
-				dailyMessageLimit,
-				quietStart,
-				quietEnd,
-				notifyOnLimit:
-					input.notifyOnLimit === undefined ? config.proactiveGate.notifyOnLimit : input.notifyOnLimit === true,
-				aggregationSeconds,
-				cooldownMinutes,
-				judgeProviderId,
-				judgeModelId,
-			};
-			await saveConfig();
-			log("INFO", "主动行为全局限制已更新");
-			return json(res, 200, { ok: true, proactiveGate: config.proactiveGate });
-		}
-		if (url.pathname === "/api/tools" && req.method === "PUT") {
-			const input = await body(req);
-			if (
-				!Array.isArray(input.enabled) ||
-				input.enabled.some(
-					(name) => typeof name !== "string" || !toolNames.includes(name as (typeof toolNames)[number]),
-				)
-			)
-				return json(res, 400, { ok: false, message: "工具列表无效" });
-			const search =
-				typeof input.webSearch === "object" && input.webSearch !== null
-					? (input.webSearch as Record<string, unknown>)
-					: {};
-			const provider = search.provider;
-			if (provider !== undefined && !["tavily", "brave", "exa", "serper"].includes(String(provider)))
-				return json(res, 400, { ok: false, message: "搜索提供商无效" });
-			const submittedKeys =
-				typeof search.apiKeys === "object" && search.apiKeys !== null
-					? (search.apiKeys as Record<string, unknown>)
-					: {};
-			const apiKeys = { ...config.tools.webSearch.apiKeys };
-			for (const name of ["tavily", "brave", "exa", "serper"] as const)
-				if (typeof submittedKeys[name] === "string" && submittedKeys[name])
-					apiKeys[name] = submittedKeys[name] as string;
-			const previousSkillsEnabled = config.tools.skillsEnabled;
-			const previousStickersEnabled = config.tools.stickersEnabled;
-			const mcpEnabled = input.mcpEnabled === undefined ? config.tools.mcpEnabled : input.mcpEnabled === true;
-			const skillsEnabled =
-				input.skillsEnabled === undefined ? config.tools.skillsEnabled : input.skillsEnabled === true;
-			const stickersEnabled =
-				input.stickersEnabled === undefined ? config.tools.stickersEnabled : input.stickersEnabled === true;
-			config.tools = {
-				enabled: [...new Set(input.enabled as string[])],
-				mcpEnabled,
-				skillsEnabled,
-				stickersEnabled,
-				stickerAutoCollectProbability: config.tools.stickerAutoCollectProbability,
-				stickerTaggerProviderId: config.tools.stickerTaggerProviderId,
-				stickerTaggerModelId: config.tools.stickerTaggerModelId,
-				webSearch: {
-					provider: (provider as WebSearchProvider | undefined) ?? config.tools.webSearch.provider,
-					apiKeys,
-				},
-			};
-			await saveConfig();
-			if (skillsEnabled !== previousSkillsEnabled || stickersEnabled !== previousStickersEnabled)
-				agentHost.rebuildAgentSessions();
-			if (mcpEnabled !== mcpRuntime.getGlobalToolsEnabled()) {
-				mcpRuntime.setGlobalToolsEnabled(mcpEnabled);
-				agentHost.rebuildAgentSessions();
-			}
-			agentHost.applyToolSettings();
-			return json(res, 200, {
-				ok: true,
-				tools: toolCatalog.map((tool) => ({ ...tool, enabled: config.tools.enabled.includes(tool.name) })),
-				mcpEnabled: config.tools.mcpEnabled,
-				skillsEnabled: config.tools.skillsEnabled,
-				stickersEnabled: config.tools.stickersEnabled,
-				webSearch: {
-					provider: config.tools.webSearch.provider,
-					configuredProviders: Object.fromEntries(
-						Object.entries(apiKeys).map(([name, key]) => [name, Boolean(key)]),
-					),
-				},
-			});
-		}
-		if (url.pathname === "/api/stickers" && req.method === "GET")
-			return json(res, 200, {
-				stickers: await stickerStore.list(),
-				enabled: config.tools.stickersEnabled,
-				autoCollectProbability: config.tools.stickerAutoCollectProbability,
-				taggingModel: {
-					providerId: config.tools.stickerTaggerProviderId,
-					modelId: config.tools.stickerTaggerModelId,
-				},
-				taggingProviders: config.providers
-					.filter((item) => item.enabled && item.apiKey && item.models.some((model) => model.supportsVision))
-					.map(({ id, name, models }) => ({
-						id,
-						name,
-						models: models
-							.filter((model) => model.supportsVision)
-							.map(({ id: modelId, name: modelName }) => ({ id: modelId, name: modelName })),
-					})),
-			});
-		if (url.pathname === "/api/stickers/settings" && req.method === "PUT") {
-			const input = await body(req);
-			const probability = input.autoCollectProbability ?? config.tools.stickerAutoCollectProbability;
-			if (typeof probability !== "number" || !Number.isInteger(probability) || probability < 0 || probability > 100)
-				return json(res, 400, { ok: false, message: "采集概率必须是 0 到 100 的整数" });
-			const providerId =
-				typeof input.taggingProviderId === "string"
-					? input.taggingProviderId
-					: config.tools.stickerTaggerProviderId;
-			const modelId =
-				typeof input.taggingModelId === "string" ? input.taggingModelId : config.tools.stickerTaggerModelId;
-			if (Boolean(providerId) !== Boolean(modelId))
-				return json(res, 400, { ok: false, message: "请选择完整的打标模型" });
-			if (providerId) {
-				const provider = config.providers.find((item) => item.id === providerId && item.enabled && item.apiKey);
-				if (!provider?.models.some((model) => model.id === modelId && model.supportsVision))
-					return json(res, 400, { ok: false, message: "打标模型不可用或不支持视觉输入" });
-			}
-			const modelChanged =
-				providerId !== config.tools.stickerTaggerProviderId || modelId !== config.tools.stickerTaggerModelId;
-			config.tools.stickerAutoCollectProbability = probability;
-			config.tools.stickerTaggerProviderId = providerId;
-			config.tools.stickerTaggerModelId = modelId;
-			await saveConfig();
-			if (modelChanged) {
-				activeStickerTag?.controller.abort();
-				stickerTagAttempts.clear();
-				if (stickerTagTimer) clearTimeout(stickerTagTimer);
-				stickerTagTimer = undefined;
-			}
-			scheduleStickerTagging();
-			return json(res, 200, {
-				ok: true,
-				autoCollectProbability: probability,
-				taggingModel: { providerId, modelId },
-			});
-		}
-		if (url.pathname === "/api/stickers/import" && req.method === "POST") {
-			try {
-				const bytes = await binaryBody(req, 10 * 1024 * 1024);
-				const result = await stickerStore.importFile(url.searchParams.get("filename") ?? "sticker", bytes);
-				if (!result.duplicate) scheduleStickerTagging();
-				return json(res, result.duplicate ? 200 : 201, {
-					ok: true,
-					duplicate: result.duplicate,
-					sticker: result.sticker,
-					stickers: await stickerStore.list(),
-				});
-			} catch (error) {
-				return json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
-			}
-		}
-		const stickerImage = url.pathname.match(/^\/api\/stickers\/([^/]+)\/image$/);
-		if (stickerImage && req.method === "GET") {
-			const item = await stickerStore.get(decodeURIComponent(stickerImage[1]!));
-			const image = item && (await stickerStore.image(item.id));
-			if (!item || !image) return json(res, 404, { ok: false, message: "表情包不存在" });
-			res.writeHead(200, {
-				"content-type": item.mimeType,
-				"cache-control": "private, max-age=300",
-				"x-content-type-options": "nosniff",
-			});
-			res.end(image);
-			return;
-		}
-		const stickerMatch = url.pathname.match(/^\/api\/stickers\/([^/]+)$/);
-		if (stickerMatch && req.method === "PATCH") {
-			const input = await body(req);
-			if (
-				input.description !== undefined &&
-				(typeof input.description !== "string" || input.description.length > 500)
-			)
-				return json(res, 400, { ok: false, message: "描述最多 500 个字符" });
-			if (
-				input.tags !== undefined &&
-				(!Array.isArray(input.tags) || input.tags.some((tag) => typeof tag !== "string") || input.tags.length > 20)
-			)
-				return json(res, 400, { ok: false, message: "标签列表无效" });
-			if (input.status !== undefined && input.status !== "pending" && input.status !== "approved")
-				return json(res, 400, { ok: false, message: "审核状态无效" });
-			const sticker = await stickerStore.update(decodeURIComponent(stickerMatch[1]!), {
-				...(typeof input.description === "string" ? { description: input.description } : {}),
-				...(Array.isArray(input.tags) ? { tags: input.tags as string[] } : {}),
-				...(input.status === "pending" || input.status === "approved" ? { status: input.status } : {}),
-			});
-			return sticker
-				? json(res, 200, { ok: true, sticker, stickers: await stickerStore.list() })
-				: json(res, 404, { ok: false, message: "表情包不存在" });
-		}
-		if (stickerMatch && req.method === "DELETE") {
-			const deleted = await stickerStore.remove(decodeURIComponent(stickerMatch[1]!));
-			return deleted
-				? json(res, 200, { ok: true, stickers: await stickerStore.list() })
-				: json(res, 404, { ok: false, message: "表情包不存在" });
-		}
-		if (url.pathname === "/api/skills" && req.method === "GET")
-			return json(res, 200, { skills: listInstalledSkills(agentDir), enabled: config.tools.skillsEnabled });
-		if (url.pathname === "/api/skills" && req.method === "POST") {
-			const input = await body(req);
-			if (typeof input.sourceUrl !== "string" || input.sourceUrl.length > 2000)
-				return json(res, 400, { ok: false, message: "请提供有效的 GitHub 技能目录链接" });
-			try {
-				const skill = await installSkillFromGitHub(agentDir, input.sourceUrl);
-				if (config.tools.skillsEnabled) agentHost.rebuildAgentSessions();
-				return json(res, 201, { ok: true, skill, skills: listInstalledSkills(agentDir) });
-			} catch (error) {
-				return json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
-			}
-		}
-		if (url.pathname === "/api/skills/import" && req.method === "POST") {
-			if (!req.headers["content-type"]?.toLowerCase().includes("application/zip"))
-				return json(res, 415, { ok: false, message: "请上传 ZIP 文件" });
-			try {
-				const archive = await binaryBody(req, 20_000_000);
-				const skill = await installSkillFromZip(agentDir, archive);
-				if (config.tools.skillsEnabled) agentHost.rebuildAgentSessions();
-				return json(res, 201, { ok: true, skill, skills: listInstalledSkills(agentDir) });
-			} catch (error) {
-				return json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
-			}
-		}
-		const skillMatch = url.pathname.match(/^\/api\/skills\/([^/]+)$/);
-		if (skillMatch && req.method === "DELETE") {
-			try {
-				await removeInstalledSkill(agentDir, decodeURIComponent(skillMatch[1]!));
-				if (config.tools.skillsEnabled) agentHost.rebuildAgentSessions();
-				return json(res, 200, { ok: true, skills: listInstalledSkills(agentDir) });
-			} catch (error) {
-				return json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
-			}
-		}
-		if (url.pathname === "/api/personas" && req.method === "GET")
-			return json(res, 200, { personas: config.personas, activePersonaId: config.activePersonaId });
-		if (url.pathname === "/api/personas" && req.method === "POST") {
-			const input = await body(req);
-			const persona: PersonaConfig = {
-				id: crypto.randomUUID(),
-				name: String(input.name ?? "新人格").trim(),
-				description: String(input.description ?? ""),
-				systemPrompt: String(input.systemPrompt ?? ""),
-			};
-			if (!persona.name || !persona.systemPrompt)
-				return json(res, 400, { ok: false, message: "人格名称和系统提示词不能为空" });
-			config.personas.push(persona);
-			await saveConfig();
-			return json(res, 201, { personas: config.personas, activePersonaId: config.activePersonaId });
-		}
-		const personaMatch = url.pathname.match(/^\/api\/personas\/([^/]+)$/);
-		if (personaMatch && req.method === "PUT") {
-			const persona = config.personas.find((item) => item.id === decodeURIComponent(personaMatch[1] ?? ""));
-			if (!persona) return json(res, 404, { ok: false, message: "人格不存在" });
-			const input = await body(req);
-			if (typeof input.name === "string") persona.name = input.name.trim();
-			if (typeof input.description === "string") persona.description = input.description;
-			if (typeof input.systemPrompt === "string") persona.systemPrompt = input.systemPrompt;
-			if (!persona.name || !persona.systemPrompt)
-				return json(res, 400, { ok: false, message: "人格名称和系统提示词不能为空" });
-			await saveConfig();
-			return json(res, 200, { personas: config.personas, activePersonaId: config.activePersonaId });
-		}
-		if (personaMatch && req.method === "DELETE") {
-			const id = decodeURIComponent(personaMatch[1] ?? "");
-			if (!config.personas.some((item) => item.id === id))
-				return json(res, 404, { ok: false, message: "人格不存在" });
-			if (config.personas.length < 2) return json(res, 400, { ok: false, message: "至少保留一个人格" });
-			config.personas = config.personas.filter((item) => item.id !== id);
-			if (config.activePersonaId === id) config.activePersonaId = config.personas[0]?.id ?? "";
-			await saveConfig();
-			return json(res, 200, { personas: config.personas, activePersonaId: config.activePersonaId });
-		}
-		if (url.pathname === "/api/personas/active" && req.method === "PUT") {
-			const input = await body(req);
-			const id = String(input.id ?? "");
-			if (!config.personas.some((item) => item.id === id))
-				return json(res, 404, { ok: false, message: "人格不存在" });
-			config.activePersonaId = id;
-			await saveConfig();
-			log("INFO", `当前人格切换为：${config.personas.find((item) => item.id === id)?.name ?? id}`);
-			return json(res, 200, { personas: config.personas, activePersonaId: id });
-		}
-		if (url.pathname === "/api/logs" && req.method === "GET")
-			return json(res, 200, { logs: runtimeLogs.slice(-500).reverse() });
-		if (url.pathname === "/api/peers" && req.method === "GET") return json(res, 200, { peers: peerConfigs });
-		if (url.pathname === "/api/peers" && req.method === "POST") {
-			const input = await body(req);
-			const scope = input.scope;
-			const peerId = String(input.peerId ?? "").trim();
-			const botId = String(input.botId ?? "");
-			const bot = config.qqBots.find((item) => item.id === botId);
-			if ((scope !== "group" && scope !== "c2c") || !peerId || !bot)
-				return json(res, 400, { ok: false, message: "请选择 Bot、对象类型并填写平台对象 ID/OpenID" });
-			if (getPeerConfig(scope, peerId, botId)) return json(res, 409, { ok: false, message: "该对象已存在" });
-			const peer = createPeerConfig(
-				scope,
-				peerId,
-				botId,
-				String(input.name ?? "").trim() || `${scope === "group" ? "群" : "用户"} ${peerId}`,
-			);
-			peerConfigs.push(peer);
-			await savePeerConfigs();
-			return json(res, 201, { ok: true, peer, peers: peerConfigs });
-		}
-		const peerMatch = url.pathname.match(/^\/api\/peers\/([^/]+)\/([^/]+)\/([^/]+)$/);
-		if (peerMatch && req.method === "DELETE") {
-			const botId = decodeURIComponent(peerMatch[1]!);
-			const scope = peerMatch[2];
-			const peerId = decodeURIComponent(peerMatch[3]!);
-			if (scope !== "group" && scope !== "c2c") return json(res, 400, { ok: false, message: "对象类型无效" });
-			const index = peerConfigs.findIndex(
-				(item) => item.botId === botId && item.scope === scope && item.peerId === peerId,
-			);
-			if (index < 0) return json(res, 404, { ok: false, message: "对象不存在" });
-			peerConfigs.splice(index, 1);
-			agentHost.disposePeer(botId, scope, peerId, sessions);
-			sessions = sessions.filter((item) => item.botId !== botId || item.scope !== scope || item.peerId !== peerId);
-			await savePeerConfigs();
-			await saveSessions();
-			return json(res, 200, { ok: true });
-		}
-		if (url.pathname === "/api/peer-config" && (req.method === "GET" || req.method === "PUT")) {
-			const input = req.method === "PUT" ? await body(req) : Object.fromEntries(url.searchParams.entries());
-			const scope = input.scope;
-			const peerId = String(input.peerId ?? "");
-			const botId = String(input.botId ?? "");
-			if ((scope !== "group" && scope !== "c2c") || !peerId || !botId)
-				return json(res, 400, { ok: false, message: "缺少群/个人对象信息" });
-			const current = getPeerConfig(scope, peerId, botId);
-			if (req.method === "GET") {
-				return json(res, 200, {
-					config:
-						current ?? createPeerConfig(scope, peerId, botId, `${scope === "group" ? "群" : "用户"} ${peerId}`),
-					personas: config.personas,
-					providers: config.providers
-						.filter((item) => item.enabled && item.apiKey)
-						.map(({ id, name, models }) => ({
-							id,
-							name,
-							models: models.map(({ id: modelId, name: modelName }) => ({ id: modelId, name: modelName })),
-						})),
-				});
-			}
-			const personaId = String(input.personaId ?? "");
-			const providerId = String(input.providerId ?? "");
-			const modelId = String(input.modelId ?? "");
-			const persona = config.personas.find((item) => item.id === personaId);
-			const provider = config.providers.find((item) => item.id === providerId && item.enabled && item.apiKey);
-			if (!persona || !provider || !provider.models.some((item) => item.id === modelId))
-				return json(res, 400, { ok: false, message: "请选择有效的人格、已启用提供商和模型" });
-			const rawFeatures =
-				typeof input.features === "object" && input.features !== null
-					? (input.features as Record<string, unknown>)
-					: {};
-			const next: PeerConfig = {
-				botId,
-				scope,
-				peerId,
-				name:
-					String(input.name ?? current?.name ?? `${scope === "group" ? "群" : "用户"} ${peerId}`).trim() ||
-					`${scope === "group" ? "群" : "用户"} ${peerId}`,
-				personaId,
-				providerId,
-				modelId,
-				useTools: input.useTools !== false,
-				features: { activeReply: rawFeatures.activeReply === true },
-			};
-			const index = peerConfigs.findIndex(
-				(item) => item.scope === scope && item.peerId === peerId && item.botId === botId,
-			);
-			if (index >= 0) peerConfigs[index] = next;
-			else peerConfigs.push(next);
-			await savePeerConfigs();
-			for (const session of sessions)
-				if (session.scope === scope && session.peerId === peerId && session.botId === botId) {
-					agentHost.applyPeerConfigToSession(session, next);
-					await saveSessions();
-				}
-			agentHost.applyToolSettings();
-			log("INFO", `已更新${scope === "group" ? "群聊" : "个人"}配置：${peerId}`);
-			return json(res, 200, { ok: true, config: next });
-		}
-		if (url.pathname === "/api/sessions" && req.method === "GET")
-			return json(res, 200, { sessions: sessions.map(publicSession), peers: peerConfigs });
-		if (url.pathname === "/api/sessions" && req.method === "POST") {
-			const input = await body(req);
-			const scope = input.scope;
-			const peerId = String(input.peerId ?? "");
-			const botId = String(input.botId ?? "");
-			if (scope !== "group" && scope !== "c2c") return json(res, 400, { ok: false, message: "对象类型无效" });
-			const peer = getPeerConfig(scope, peerId, botId);
-			if (!peer) return json(res, 404, { ok: false, message: "对象不存在" });
-			const session = createSession(scope, peerId, peer.name, botId);
-			agentHost.applyPeerConfigToSession(session, peer);
-			await saveSessions();
-			return json(res, 201, { ok: true, session: publicSession(session) });
-		}
-		const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
-		if (sessionMatch && req.method === "GET") {
-			const id = decodeURIComponent(sessionMatch[1] ?? "");
-			const session = sessions.find((item) => item.id === id);
-			return session ? json(res, 200, { session }) : json(res, 404, { ok: false, message: "会话不存在" });
-		}
-		if (sessionMatch && req.method === "PUT") {
-			const id = decodeURIComponent(sessionMatch[1] ?? "");
-			const session = sessions.find((item) => item.id === id);
-			if (!session) return json(res, 404, { ok: false, message: "会话不存在" });
-			const input = await body(req);
-			if (typeof input.title === "string") session.title = input.title.trim() || session.title;
-			if (typeof input.active === "boolean") {
-				for (const other of sessions)
-					if (other.scope === session.scope && other.peerId === session.peerId && other.botId === session.botId)
-						other.active = other.id === session.id && input.active;
-				session.active = input.active;
-			}
-			await saveSessions();
-			return json(res, 200, { session });
-		}
-		if (sessionMatch && req.method === "DELETE") {
-			const id = decodeURIComponent(sessionMatch[1] ?? "");
-			const session = sessions.find((item) => item.id === id);
-			if (!session) return json(res, 404, { ok: false, message: "会话不存在" });
-			sessions = sessions.filter((item) => item.id !== id);
-			agentHost.disposeSession(id);
-			await saveSessions();
-			return json(res, 200, {
-				ok: true,
-				remainingPeerSessions: sessions.filter(
-					(item) => item.botId === session.botId && item.scope === session.scope && item.peerId === session.peerId,
-				).length,
-			});
-		}
-		if (url.pathname === "/api/providers/models" && req.method === "POST") {
-			const input = await body(req);
-			const provider = config.providers.find((item) => item.id === String(input.providerId ?? ""));
-			const apiKey = String(input.apiKey ?? provider?.apiKey ?? "");
-			if (!provider && (!input.baseUrl || !input.apiKey))
-				return json(res, 404, { ok: false, message: "请填写提供商 API 地址和 API Key" });
-			if (!apiKey) return json(res, 400, { ok: false, message: "请先配置 API Key" });
-			const baseUrl = String(input.baseUrl ?? provider?.baseUrl ?? "https://api.openai.com/v1").replace(/\/$/, "");
-			const isAnthropic = String(input.api ?? provider?.api ?? "") === "anthropic-messages";
-			const modelsUrl = isAnthropic
-				? `${baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`}/models`
-				: `${baseUrl}/models`;
-			const controller = new AbortController();
-			const timeout = setTimeout(() => controller.abort(), 15000);
-			try {
-				const headers: Record<string, string> = isAnthropic
-					? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
-					: { authorization: `Bearer ${apiKey}` };
-				const response = await fetch(modelsUrl, { headers, signal: controller.signal });
-				const data: unknown = await response.json();
-				if (!response.ok) return json(res, 400, { ok: false, message: `模型列表接口返回 HTTP ${response.status}` });
-				const models =
-					typeof data === "object" && data !== null && Array.isArray((data as { data?: unknown }).data)
-						? (data as { data: Array<{ id?: unknown; name?: unknown; display_name?: unknown }> }).data
-								.filter((item) => typeof item.id === "string")
-								.map((item) => ({
-									id: item.id as string,
-									name:
-										typeof item.name === "string"
-											? item.name
-											: typeof item.display_name === "string"
-												? item.display_name
-												: (item.id as string),
-								}))
-						: [];
-				return json(res, 200, { ok: true, models });
-			} finally {
-				clearTimeout(timeout);
-			}
-		}
-		if (url.pathname === "/api/providers/catalog" && req.method === "GET")
-			return json(res, 200, {
-				providers: config.providers.map(({ apiKey, ...provider }) => ({
-					...provider,
-					apiKeyConfigured: Boolean(apiKey),
-				})),
-			});
-		if (url.pathname === "/api/qqbot/status" && req.method === "GET")
-			return json(res, 200, {
-				connections: config.qqBots.map((bot) => ({
-					id: bot.id,
-					...(qqStates.get(bot.id) ?? {
-						phase: "disconnected",
-						appId: bot.appId,
-						nickname: bot.nickname,
-						avatarUrl: bot.avatarUrl,
-					}),
-					enabled: bot.enabled,
-				})),
-				qr: qrState,
-			});
-		if (url.pathname === "/api/qqbot/bots" && req.method === "POST") {
-			const input = await body(req);
-			const appId = String(input.appId ?? "").trim();
-			const appSecret = String(input.appSecret ?? "").trim();
-			const tested = await testQQ(appId, appSecret);
-			if (!tested.ok) return json(res, 400, tested);
-			const id = appId;
-			if (config.qqBots.some((bot) => bot.id === id))
-				return json(res, 409, { ok: false, message: "该 AppID 已添加" });
-			const bot: QqBotConfig = {
-				id,
-				nickname: String(input.nickname ?? "QQ Bot").trim() || "QQ Bot",
-				avatarUrl: "",
-				appId,
-				appSecret,
-				mode: "credentials",
-				enabled: false,
-			};
-			config.qqBots.push(bot);
-			await activateBot(bot);
-			return json(res, 201, publicConfig());
-		}
-		const botMatch = url.pathname.match(/^\/api\/qqbot\/bots\/([^/]+)$/);
-		if (botMatch && req.method === "PUT") {
-			const id = decodeURIComponent(botMatch[1] ?? "");
-			const bot = config.qqBots.find((item) => item.id === id);
-			if (!bot) return json(res, 404, { ok: false, message: "机器人不存在" });
-			const input = await body(req);
-			if (typeof input.nickname === "string") bot.nickname = input.nickname.trim() || "QQ Bot";
-			if (typeof input.enabled === "boolean") {
-				bot.enabled = input.enabled;
-				if (input.enabled) await activateBot(bot);
-				else {
-					stopQQ(id);
-					await saveConfig();
-				}
-			}
-			if (input.nickname !== undefined) {
-				await saveConfig();
-				const state = qqStates.get(id);
-				if (state) qqStates.set(id, { ...state, nickname: bot.nickname });
-			}
-			return json(res, 200, publicConfig());
-		}
-		if (botMatch && req.method === "DELETE") {
-			const id = decodeURIComponent(botMatch[1] ?? "");
-			if (!config.qqBots.some((item) => item.id === id))
-				return json(res, 404, { ok: false, message: "机器人不存在" });
-			stopQQ(id);
-			config.qqBots = config.qqBots.filter((item) => item.id !== id);
-			qqStates.delete(id);
-			await saveConfig();
-			return json(res, 200, publicConfig());
-		}
-		if (url.pathname === "/api/qqbot/test" && req.method === "POST") {
-			const input = await body(req);
-			return json(res, 200, await testQQ(String(input.appId ?? ""), String(input.appSecret ?? "")));
-		}
-		if (url.pathname === "/api/qqbot/connect" && req.method === "POST") {
-			const input = await body(req);
-			const appId = String(input.appId ?? "").trim();
-			const appSecret = String(input.appSecret ?? "").trim();
-			const tested = await testQQ(appId, appSecret);
-			if (!tested.ok) return json(res, 400, tested);
-			const existing = config.qqBots.find((bot) => bot.appId === appId);
-			if (existing) {
-				existing.appSecret = appSecret;
-				existing.mode = "credentials";
-				await activateBot(existing);
-			} else {
-				const bot: QqBotConfig = {
-					id: appId,
-					nickname: "QQ Bot",
-					avatarUrl: "",
-					appId,
-					appSecret,
-					mode: "credentials",
-					enabled: false,
-				};
-				config.qqBots.push(bot);
-				await activateBot(bot);
-			}
-			return json(res, 202, { ok: true, message: "机器人已保存，正在连接 QQ 官方 Gateway" });
-		}
-		if (url.pathname === "/api/qqbot/qr/start" && req.method === "POST") {
-			const input = await body(req);
-			startQr(String(input.nickname ?? "QQ Bot"));
-			return json(res, 202, qrState);
-		}
-		if (url.pathname === "/api/chat" && req.method === "POST") {
-			const input = await body(req);
-			const message = String(input.message ?? "");
-			const result = await createChatCompletion(
-				config,
-				String(input.providerId ?? ""),
-				String(input.modelId ?? ""),
-				message,
-				Array.isArray(input.messages) ? (input.messages as ChatMessage[]) : [],
-			);
-			log(
-				result.ok ? "INFO" : "ERROR",
-				result.ok
-					? `调试台模型请求完成：${result.providerId}/${result.modelId}`
-					: `调试台模型请求失败：${result.error ?? "未知错误"}`,
-			);
-			return json(res, result.ok ? 200 : 400, result);
-		}
-		return json(res, 404, { ok: false, message: "Not found" });
-	} catch (error) {
-		return json(res, 500, { ok: false, message: error instanceof Error ? error.message : String(error) });
-	}
+/** 打标模型变化时丢弃在跑的任务与重试计数；调用方随后自行排期。 */
+function resetStickerTagging(): void {
+	activeStickerTag?.controller.abort();
+	stickerTagAttempts.clear();
+	if (stickerTagTimer) clearTimeout(stickerTagTimer);
+	stickerTagTimer = undefined;
 }
+
+/**
+ * 管理 API 的依赖上下文。
+ *
+ * 路由模块只通过这里访问运行时状态：`config` / `sessions` 会被整体替换，
+ * 因此一律走 get/replace，不允许路由各自持有引用。
+ */
+const httpContext: HttpContext = {
+	config: {
+		get: () => config,
+		replace: (next) => {
+			config = next;
+		},
+		save: saveConfig,
+	},
+	sessions: {
+		get: () => sessions,
+		replace: (next) => {
+			sessions = next;
+		},
+		save: saveSessions,
+		create: createSession,
+	},
+	peers: {
+		get: () => peerConfigs,
+		find: getPeerConfig,
+		ensure: createPeerConfig,
+		save: savePeerConfigs,
+	},
+	agentHost,
+	mcpRuntime,
+	stickers: { store: stickerStore, scheduleTagging: scheduleStickerTagging, resetTagging: resetStickerTagging },
+	proactive: {
+		metrics: proactiveMetrics,
+		decisions: proactiveDecisions,
+		sentToday: () => (proactiveUsage.date === localDateKey() ? proactiveUsage.sent : 0),
+	},
+	qq: {
+		states: qqStates,
+		qr: () => qrState,
+		test: testQQ,
+		activate: activateBot,
+		stop: stopQQ,
+		startQr,
+	},
+	logs: { list: () => logger.list() },
+	agentDir,
+	log,
+};
 
 await loadConfig();
 await loadRuntimeData();
@@ -2156,6 +1297,6 @@ const activeBot = config.qqBots.find((bot) => bot.enabled);
 if (activeBot?.appId && activeBot.appSecret) void connectQQ(activeBot);
 log("INFO", "Miubot Server 已启动");
 log("INFO", `管理 API 仅接受本机工作台访问；令牌文件：${authTokenPath}`);
-createServer((req, res) => {
-	void handler(req, res);
-}).listen(port, "127.0.0.1", () => console.log(`Miubot server listening on http://127.0.0.1:${port}`));
+createServer(createRequestHandler({ context: httpContext, security: apiSecurity })).listen(port, "127.0.0.1", () =>
+	console.log(`Miubot server listening on http://127.0.0.1:${port}`),
+);
