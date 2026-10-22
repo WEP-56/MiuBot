@@ -196,6 +196,39 @@ export function normalizeInboundMessage(
 	};
 }
 
+/** 引用消息的 Prompt 片段；没有引用时返回空串，便于调用方直接过滤。 */
+export function describeQuoteContext(quote: QuotedMessage | undefined): string {
+	if (!quote) return "";
+	return `本条消息引用了更早的一条消息${quote.attachments.length ? `（含 ${quote.attachments.length} 个附件）` : ""}，被引用内容：\n${quote.text || "(被引用消息没有文本)"}`;
+}
+
+export type InboundAcceptance =
+	| { status: "accepted"; message: NormalizedInboundMessage; dedupKey: string }
+	| { status: "duplicate"; messageId: string; peerId: string; dedupKey: string }
+	| { status: "ignored"; reason: "unsupported-scope" | "sender-is-bot" };
+
+/**
+ * 入站准入：过滤非会话消息与 Bot 自身消息、归一化、再按 `botId + messageId` 去重。
+ *
+ * 宿主拿到 `accepted` 后只做会话编排；处理失败时可调用 `deduper.forget(dedupKey)` 允许重试。
+ */
+export function acceptInboundMessage(options: {
+	botId: string;
+	appId: string;
+	message: QQBotInboundMessage;
+	deduper: MessageDeduplicator;
+}): InboundAcceptance {
+	const { botId, appId, message, deduper } = options;
+	if (message.kind !== "group" && message.kind !== "c2c") return { status: "ignored", reason: "unsupported-scope" };
+	if (message.senderIsBot) return { status: "ignored", reason: "sender-is-bot" };
+	const normalized = normalizeInboundMessage(botId, appId, message);
+	if (!normalized) return { status: "ignored", reason: "unsupported-scope" };
+	const dedupKey = `${botId}:${normalized.messageId}`;
+	if (!deduper.shouldProcess(dedupKey))
+		return { status: "duplicate", messageId: normalized.messageId, peerId: normalized.peerId, dedupKey };
+	return { status: "accepted", message: normalized, dedupKey };
+}
+
 /**
  * 入站消息 id 去重。
  *

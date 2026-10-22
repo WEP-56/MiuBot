@@ -184,11 +184,13 @@ Host 在 `setup()` 阶段登记 Tool / Handler，注册必须支持撤销；将�
 
 > **[现有] 已落地（2026-10-22）** — 平台层位于 `apps/server/src/platform/`：
 > - `events.ts`：`NormalizedPlatformEvent`、`createPlatformEventBus`、各 `normalize*` 函数
-> - `inbound.ts`：`normalizeInboundMessage`（引用链 / 消息段 / 附件 / @ 列表）、`createMessageDeduplicator`
+> - `inbound.ts`：`normalizeInboundMessage`（引用链 / 消息段 / 附件 / @ 列表）、`createMessageDeduplicator`、`acceptInboundMessage`（准入+去重）、`describeQuoteContext`
 > - `outbound.ts`：`createOutboundChannel`（分片 / 被动配额降级 / Markdown / 媒体 / C2C 流式）
+> - `runtime.ts`：`createQqPlatform()` 组装事件总线、入站去重与出站通道缓存（`channelFor(bot)`）
+> - `qq-adapter.ts`：`attachQqBotEvents()` 把 SDK 的 `ready` / `error` / `message` / `rawEvent` / `interaction` / `resumed` / `disconnected` 接到事件总线
 >
-> 接入点：`apps/server/src/index.ts` 的 `connectQQ()` 注册 `message` / `rawEvent` / `interaction` / `resumed` / `disconnected`，派发到服务级总线。
-> 测试：`apps/server/test/platform-{events,inbound,outbound}.test.ts`。
+> 接入点：`apps/server/src/index.ts` 作为组合根，只在 `connectQQ()` 里注入 Bot、日志与 `resolveBotId`，不再持有平台归一化逻辑。
+> 测试：`apps/server/test/platform-{events,inbound,outbound,qq}.test.ts`。
 
 事件来源分两类：
 

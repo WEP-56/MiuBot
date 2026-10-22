@@ -15,15 +15,11 @@ import { QQBot, type QQBotInboundMessage } from "@tencent-connect/qqbot-nodejs";
 import QRCode from "qrcode";
 import { createAgentHost, type PeerConfig, type RuntimeSession } from "./agent-host.ts";
 import { downloadImage, prepareInboundMedia } from "./media.ts";
-import {
-	createPlatformEventBus,
-	normalizeConnectionEvent,
-	normalizeInteractionEvent,
-	normalizeMessageEvent,
-	normalizeRawEvent,
-} from "./platform/events.ts";
-import { createMessageDeduplicator, normalizeInboundMessage } from "./platform/inbound.ts";
-import { createOutboundChannel, type OutboundChannel } from "./platform/outbound.ts";
+import { normalizeMessageEvent } from "./platform/events.ts";
+import { acceptInboundMessage, describeQuoteContext } from "./platform/inbound.ts";
+import type { OutboundChannel } from "./platform/outbound.ts";
+import { attachQqBotEvents } from "./platform/qq-adapter.ts";
+import { createQqPlatform } from "./platform/runtime.ts";
 import {
 	type AppConfig,
 	type ChatMessage,
@@ -96,15 +92,15 @@ const activeReplyCooldowns = new Map<string, number>();
 const gateNoticeDates = new Map<string, string>();
 const targetQueues = new Map<string, Promise<void>>();
 const qqBots = new Map<string, QQBot>();
-const outboundChannels = new Map<string, OutboundChannel>();
-const platformEventBus = createPlatformEventBus({
-	onError: (error, event, type) =>
+const qqPlatform = createQqPlatform({
+	onEventError: (error, type, eventType) =>
 		log(
 			"ERROR",
-			`平台事件订阅失败（${type} / ${event.type}）：${error instanceof Error ? error.message : String(error)}`,
+			`平台事件订阅失败（${type} / ${eventType}）：${error instanceof Error ? error.message : String(error)}`,
 		),
+	onSendError: (error) => log("WARN", `发送消息失败：${error instanceof Error ? error.message : String(error)}`),
+	resolveBotId: (bot) => config.qqBots.find((item) => qqBots.get(item.id) === bot)?.id,
 });
-const inboundDeduper = createMessageDeduplicator();
 const qqStates = new Map<
 	string,
 	{
@@ -559,7 +555,8 @@ async function checkActiveReplyGate(groupId: string, notify: boolean): Promise<b
 		const bot = config.qqBots.find((item) => item.enabled);
 		const client = bot ? qqBots.get(bot.id) : undefined;
 		if (client)
-			await outboundChannelFor(client)
+			await qqPlatform
+				.channelFor(client)
 				.sendText({ scope: "group", targetId: groupId }, "MiuBot 的主动发言限制已触发，今天将暂时保持安静。")
 				.catch(() => {});
 	}
@@ -774,7 +771,7 @@ async function evaluateActiveReplyWindow(key: string): Promise<void> {
 		stickerSendContexts.set(session.id, {
 			bot,
 			target: { scope: "group", targetId: groupId },
-			channel: outboundChannelFor(bot),
+			channel: qqPlatform.channelFor(bot),
 		});
 		sessionPromptContexts.set(
 			session.id,
@@ -805,7 +802,7 @@ async function evaluateActiveReplyWindow(key: string): Promise<void> {
 		proactiveUsage.sent++;
 		await saveProactiveUsage();
 		try {
-			await outboundChannelFor(bot).sendText({ scope: "group", targetId: groupId }, answer);
+			await qqPlatform.channelFor(bot).sendText({ scope: "group", targetId: groupId }, answer);
 		} catch (error) {
 			proactiveUsage.sent = Math.max(0, proactiveUsage.sent - 1);
 			await saveProactiveUsage();
@@ -834,46 +831,20 @@ async function evaluateActiveReplyWindow(key: string): Promise<void> {
 	}
 }
 
-function outboundChannelFor(bot: QQBot): OutboundChannel {
-	const id = config.qqBots.find((item) => qqBots.get(item.id) === bot)?.id;
-	const key = id ?? "default";
-	const existing = outboundChannels.get(key);
-	if (existing) return existing;
-	const channel = createOutboundChannel({
-		bot,
-		onError: (error) => log("WARN", `发送消息失败：${error instanceof Error ? error.message : String(error)}`),
-		onSent: (info) => {
-			void platformEventBus.emit({
-				eventId: `${key}:${info.kind}:${info.target.scope}:${info.target.targetId}:${Date.now()}`,
-				type: "message.sent",
-				platform: "qq",
-				botId: key,
-				timestamp: new Date().toISOString(),
-				scope: info.target.scope,
-				peerId: info.target.targetId,
-				payload: {
-					kind: info.kind,
-					messages: info.messages,
-					fallbackUsed: info.fallbackUsed,
-					...(info.target.msgId ? { msgId: info.target.msgId } : {}),
-				},
-			});
-		},
-	});
-	outboundChannels.set(key, channel);
-	return channel;
-}
-
 async function processQQMessage(bot: QQBot, botConfig: QqBotConfig, message: QQBotInboundMessage): Promise<void> {
 	const isGroup = message.kind === "group";
-	if (!isGroup && message.kind !== "c2c") return;
-	if (message.senderIsBot) return;
-	const normalized = normalizeInboundMessage(botConfig.id, botConfig.appId, message);
-	if (!normalized) return;
-	if (!inboundDeduper.shouldProcess(`${botConfig.id}:${normalized.messageId}`)) {
-		log("INFO", `忽略重复投递的消息：${normalized.messageId} (${normalized.peerId})`);
+	const accepted = acceptInboundMessage({
+		botId: botConfig.id,
+		appId: botConfig.appId,
+		message,
+		deduper: qqPlatform.inboundDeduper,
+	});
+	if (accepted.status === "ignored") return;
+	if (accepted.status === "duplicate") {
+		log("INFO", `忽略重复投递的消息：${accepted.messageId} (${accepted.peerId})`);
 		return;
 	}
+	const normalized = accepted.message;
 	const peerId = normalized.peerId;
 	const senderId = normalized.senderId;
 	const text = normalized.text;
@@ -890,7 +861,7 @@ async function processQQMessage(bot: QQBot, botConfig: QqBotConfig, message: QQB
 	await savePeerConfigs();
 	conversationActivityVersion++;
 	interruptStickerTagging();
-	void platformEventBus.emit(normalizeMessageEvent(botConfig.id, message));
+	void qqPlatform.eventBus.emit(normalizeMessageEvent(botConfig.id, message));
 	const collectProbability =
 		config.tools.stickersEnabled && peerConfig?.useTools !== false ? config.tools.stickerAutoCollectProbability : 0;
 	if (collectProbability > 0 && normalized.attachments.length) {
@@ -940,7 +911,7 @@ async function processQQMessage(bot: QQBot, botConfig: QqBotConfig, message: QQB
 	const queueKey = `${botConfig.id}:${isGroup ? "group" : "c2c"}:${peerId}`;
 	const previous = targetQueues.get(queueKey) ?? Promise.resolve();
 	const next = previous.then(async () => {
-		const channel = outboundChannelFor(bot);
+		const channel = qqPlatform.channelFor(bot);
 		let session = sessions.find(
 			(item) =>
 				item.active &&
@@ -982,9 +953,7 @@ async function processQQMessage(bot: QQBot, botConfig: QqBotConfig, message: QQB
 		const provider = config.providers.find((item) => item.id === session.providerId);
 		const modelConfig = provider?.models.find((item) => item.id === session.modelId);
 		const media = await prepareInboundMedia(message, { supportsVision: modelConfig?.supportsVision === true });
-		const quoteContext = normalized.quote
-			? `本条消息引用了更早的一条消息${normalized.quote.attachments.length ? `（含 ${normalized.quote.attachments.length} 个附件）` : ""}，被引用内容：\n${normalized.quote.text || "(被引用消息没有文本)"}`
-			: "";
+		const quoteContext = describeQuoteContext(normalized.quote);
 		const prompt =
 			[text, quoteContext, media.context].filter(Boolean).join("\n\n") ||
 			(media.images.length > 0 ? "请查看并描述这张图片。" : "请处理这条附件消息。");
@@ -1074,9 +1043,9 @@ async function processQQMessage(bot: QQBot, botConfig: QqBotConfig, message: QQB
 	);
 	await next.catch(async (error: unknown) => {
 		log("ERROR", `消息处理异常：${error instanceof Error ? error.message : String(error)}`);
-		inboundDeduper.forget(`${botConfig.id}:${normalized.messageId}`);
+		qqPlatform.inboundDeduper.forget(accepted.dedupKey);
 		try {
-			await outboundChannelFor(bot).sendText(message.replyTarget, "处理消息时发生错误，请稍后重试。");
+			await qqPlatform.channelFor(bot).sendText(message.replyTarget, "处理消息时发生错误，请稍后重试。");
 		} catch {}
 	});
 }
@@ -1166,58 +1135,45 @@ async function connectQQ(botConfig: QqBotConfig): Promise<void> {
 		const bot = new QQBot({ appId, appSecret, transport: "websocket", logger: console } as ConstructorParameters<
 			typeof QQBot
 		>[0]);
-		bot.on("ready", () => {
-			qqStates.set(id, { phase: "connected", appId, nickname: botConfig.nickname, avatarUrl: botConfig.avatarUrl });
-			void platformEventBus.emit(normalizeConnectionEvent(id, "platform.connection.ready"));
-			void bot.api
-				.get<{ username?: string; nickname?: string; avatar?: string }>("/users/@me")
-				.then((profile) => {
-					const current = config.qqBots.find((item) => item.id === id);
-					if (!current) return;
-					if (current.nickname === "QQ Bot")
-						current.nickname = profile.nickname || profile.username || current.nickname;
-					current.avatarUrl = profile.avatar || current.avatarUrl;
-					qqStates.set(id, {
-						phase: "connected",
-						appId,
-						nickname: current.nickname,
-						avatarUrl: current.avatarUrl,
-					});
-					void saveConfig();
-				})
-				.catch(() => {});
-		});
-		bot.on("error", (error: unknown) => {
-			qqStates.set(id, {
-				phase: "error",
-				appId,
-				nickname: botConfig.nickname,
-				avatarUrl: botConfig.avatarUrl,
-				error: error instanceof Error ? error.message : String(error),
-			});
-		});
-		bot.on("message", async (_context, message) => {
-			await processQQMessage(bot, botConfig, message);
-		});
-		// 生命周期事件：SDK 把未识别事件统一从 rawEvent 透传，这里归一化后交给事件总线。
-		bot.on("rawEvent", (context) => {
-			void platformEventBus.emit(normalizeRawEvent(id, context.eventType, context.data));
-		});
-		bot.on("interaction", async (_context, event) => {
-			try {
-				await platformEventBus.emit(normalizeInteractionEvent(id, event));
-			} finally {
-				// 3 = 忽略/未匹配；插件未处理时避免平台侧一直等待。
-				await bot
-					.acknowledgeInteraction(event.id, platformEventBus.listenerCount("platform.interaction") > 0 ? 0 : 3)
+		attachQqBotEvents({
+			bot,
+			botId: id,
+			eventBus: qqPlatform.eventBus,
+			onMessage: (message) => processQQMessage(bot, botConfig, message),
+			onReady: (readyBot) => {
+				qqStates.set(id, {
+					phase: "connected",
+					appId,
+					nickname: botConfig.nickname,
+					avatarUrl: botConfig.avatarUrl,
+				});
+				void readyBot.api
+					.get<{ username?: string; nickname?: string; avatar?: string }>("/users/@me")
+					.then((profile) => {
+						const current = config.qqBots.find((item) => item.id === id);
+						if (!current) return;
+						if (current.nickname === "QQ Bot")
+							current.nickname = profile.nickname || profile.username || current.nickname;
+						current.avatarUrl = profile.avatar || current.avatarUrl;
+						qqStates.set(id, {
+							phase: "connected",
+							appId,
+							nickname: current.nickname,
+							avatarUrl: current.avatarUrl,
+						});
+						void saveConfig();
+					})
 					.catch(() => {});
-			}
-		});
-		bot.on("resumed", () => {
-			void platformEventBus.emit(normalizeConnectionEvent(id, "platform.connection.resumed"));
-		});
-		bot.on("disconnected", (event) => {
-			void platformEventBus.emit(normalizeConnectionEvent(id, "platform.connection.lost", event));
+			},
+			onError: (error) => {
+				qqStates.set(id, {
+					phase: "error",
+					appId,
+					nickname: botConfig.nickname,
+					avatarUrl: botConfig.avatarUrl,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			},
 		});
 		qqBots.set(id, bot);
 		await bot.start();
