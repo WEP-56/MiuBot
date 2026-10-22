@@ -66,6 +66,20 @@ export type ProactiveGateSettings = {
 	judgeProviderId: string;
 	judgeModelId: string;
 };
+/**
+ * 插件启停配置。
+ *
+ * 只记录「管理员明确允许/禁止哪些插件运行」；插件自身的配置存在插件目录，业务数据存在存储命名空间。
+ *
+ * `enabled` 留空表示「所有已安装插件都启用」——装好插件却毫无反应比误启用更难排查。
+ * 要禁止某个插件，把它列进 `disabled`。
+ */
+export type PluginSettings = {
+	/** 白名单：仅在非空时生效，列出的插件才会启动。 */
+	enabled: string[];
+	/** 黑名单：始终优先于白名单。 */
+	disabled: string[];
+};
 export type AppConfig = {
 	qqBots: QqBotConfig[];
 	providers: ProviderConfig[];
@@ -75,6 +89,7 @@ export type AppConfig = {
 	tools: ToolSettings;
 	mcpServers: McpServerConfig[];
 	proactiveGate: ProactiveGateSettings;
+	plugins: PluginSettings;
 };
 export type ChatMessage = { role: "user" | "assistant" | "system"; content: string };
 
@@ -151,6 +166,7 @@ export function createDefaultConfig(): AppConfig {
 			judgeProviderId: "",
 			judgeModelId: "",
 		},
+		plugins: { enabled: [], disabled: [] },
 	};
 }
 

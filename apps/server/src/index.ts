@@ -2,6 +2,7 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createFileStorage, createPluginHost, type PluginHost } from "@miubot/plugin/host/index";
 import {
 	installSkillFromGitHub,
 	installSkillFromZip,
@@ -18,6 +19,7 @@ import { downloadImage, prepareInboundMedia } from "./media.ts";
 import { normalizeMessageEvent } from "./platform/events.ts";
 import { acceptInboundMessage, describeQuoteContext } from "./platform/inbound.ts";
 import type { OutboundChannel } from "./platform/outbound.ts";
+import { createInboundReferenceStore, createPluginLogger, createPluginSendBridge } from "./platform/plugin-bridge.ts";
 import { attachQqBotEvents } from "./platform/qq-adapter.ts";
 import { createQqPlatform } from "./platform/runtime.ts";
 import {
@@ -45,6 +47,12 @@ const peerConfigsPath = join(dataDir, "peer-configs.json");
 const proactiveUsagePath = join(dataDir, "proactive-usage.json");
 const logsPath = join(dataDir, "runtime.log");
 const agentDir = join(dataDir, "agent");
+/** 插件目录：每个子目录一个插件，含 `miubot.plugin.json` 与入口。 */
+const pluginsDir = join(dataDir, "plugins");
+/** 随仓库分发的内置插件；用户插件目录里的同名插件会被忽略。 */
+const builtinPluginsDir = join(root, "..", "..", "plugins");
+/** 插件存储命名空间根目录；每个插件一个 JSON 文件。 */
+const pluginStorageDir = join(dataDir, "plugin-data");
 const port = Number(process.env.MIUBOT_PORT ?? 8787);
 
 let config: AppConfig = createDefaultConfig();
@@ -100,6 +108,29 @@ const qqPlatform = createQqPlatform({
 		),
 	onSendError: (error) => log("WARN", `发送消息失败：${error instanceof Error ? error.message : String(error)}`),
 	resolveBotId: (bot) => config.qqBots.find((item) => qqBots.get(item.id) === bot)?.id,
+});
+/** 入站消息引用：让插件回复尽量走被动回复，而不是主动推送。 */
+const inboundReferences = createInboundReferenceStore();
+const pluginHost: PluginHost = createPluginHost({
+	// 内置插件优先：同名 id 以仓库内的为准，用户目录用于放自己的插件。
+	pluginsDir: [pluginsDir, builtinPluginsDir],
+	eventSource: qqPlatform.eventBus,
+	sendMessage: createPluginSendBridge(
+		{
+			channelForBotId: (botId) => {
+				const bot = qqBots.get(botId);
+				return bot ? qqPlatform.channelFor(bot) : undefined;
+			},
+			onError: (error, detail) =>
+				log(
+					"WARN",
+					`插件发送失败（${detail.botId} → ${detail.target.scope}:${detail.target.targetId}）：${error instanceof Error ? error.message : String(error)}`,
+				),
+		},
+		inboundReferences,
+	),
+	storageFor: (pluginId) => createFileStorage({ root: pluginStorageDir, pluginId }),
+	logger: createPluginLogger((level, text) => log(level, text)),
 });
 const qqStates = new Map<
 	string,
@@ -173,6 +204,14 @@ async function loadConfig(): Promise<void> {
 			imageProviders: Array.isArray(current.imageProviders) ? current.imageProviders : defaults.imageProviders,
 			proactiveGate: { ...defaults.proactiveGate, ...current.proactiveGate },
 			mcpServers: Array.isArray(current.mcpServers) ? current.mcpServers : defaults.mcpServers,
+			plugins: {
+				enabled: Array.isArray(current.plugins?.enabled)
+					? current.plugins.enabled.filter((id): id is string => typeof id === "string")
+					: defaults.plugins.enabled,
+				disabled: Array.isArray(current.plugins?.disabled)
+					? current.plugins.disabled.filter((id): id is string => typeof id === "string")
+					: defaults.plugins.disabled,
+			},
 		};
 		if (!stored.qqBots && stored.qq) await saveConfig();
 		if (config.qqBots.filter((bot) => bot.enabled).length > 1) {
@@ -862,6 +901,14 @@ async function processQQMessage(bot: QQBot, botConfig: QqBotConfig, message: QQB
 	conversationActivityVersion++;
 	interruptStickerTagging();
 	void qqPlatform.eventBus.emit(normalizeMessageEvent(botConfig.id, message));
+	// 记录本条消息的被动回复锚点：插件随后若要回复同一会话，走被动回复而非主动推送。
+	if (message.replyTarget.msgId) {
+		inboundReferences.record(
+			botConfig.id,
+			{ scope: isGroup ? "group" : "c2c", targetId: peerId },
+			message.replyTarget.msgId,
+		);
+	}
 	const collectProbability =
 		config.tools.stickersEnabled && peerConfig?.useTools !== false ? config.tools.stickerAutoCollectProbability : 0;
 	if (collectProbability > 0 && normalized.attachments.length) {
@@ -1140,6 +1187,8 @@ async function connectQQ(botConfig: QqBotConfig): Promise<void> {
 			botId: id,
 			eventBus: qqPlatform.eventBus,
 			onMessage: (message) => processQQMessage(bot, botConfig, message),
+			// 「有插件订阅了交互」不等于「这个按钮有人认领」：由插件宿主按启用状态判断。
+			canHandleInteraction: () => pluginHost.hasActiveHandler("platform.interaction"),
 			onReady: (readyBot) => {
 				qqStates.set(id, {
 					phase: "connected",
@@ -2047,6 +2096,26 @@ await loadRuntimeData();
 scheduleStickerTagging(10_000);
 mcpRuntime.setGlobalToolsEnabled(config.tools.mcpEnabled);
 await mcpRuntime.replace(config.mcpServers);
+// 先发现全部插件（含失效目录，便于诊断），再按配置启停。
+const discoveredPlugins = await pluginHost.discover();
+for (const plugin of discoveredPlugins) {
+	if (plugin.error) log("WARN", `插件不可用：${plugin.id}；${plugin.error}`);
+}
+// `enabled` 为空表示全部启用；`disabled` 始终优先。装好插件却毫无反应比误启用更难排查。
+const pluginAllowlist = config.plugins.enabled.length > 0 ? config.plugins.enabled : undefined;
+for (const plugin of discoveredPlugins) {
+	if (plugin.error) continue;
+	if (config.plugins.disabled.includes(plugin.id)) {
+		log("INFO", `插件 ${plugin.id} 已在配置中禁用，跳过启用`);
+		continue;
+	}
+	if (pluginAllowlist && !pluginAllowlist.includes(plugin.id)) continue;
+	const status = await pluginHost.start(plugin.id);
+	if (status?.state === "active") continue;
+	if (status) log("WARN", `插件 ${plugin.id} 未能启用：${status.error ?? status.state}`);
+}
+const activePluginCount = pluginHost.list().filter((plugin) => plugin.state === "active").length;
+log("INFO", `插件加载完成：${activePluginCount}/${discoveredPlugins.length} 个启用`);
 const activeBot = config.qqBots.find((bot) => bot.enabled);
 if (activeBot?.appId && activeBot.appSecret) void connectQQ(activeBot);
 log("INFO", "Miubot Server 已启动");

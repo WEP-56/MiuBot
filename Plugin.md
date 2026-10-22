@@ -556,26 +556,37 @@ Agent 主动发言是 Agent 行为策略，插件定时任务是通用调度机�
 - [x] 规范事件来源元数据（`origin` / `originPluginId` / `causationId`）与去重语义（`eventId` / `dedupKey` / `fingerprint` 分离）。
 - [x] 验收：`npm run check` / `npm run lint` / `npm test` 全绿，无 `packages → apps` 逆向依赖。
 
-**A1：Plugin Host 本体**
+**A1：Plugin Host 本体（[现有]，2026-10-22 已完成）**
 
-- [ ] Manifest 格式（`miubot.plugin.json`）、`schemaVersion` 与 Schema 校验。
-- [ ] 服务级 `PluginHost`：发现、本地加载、启动、停止、dispose、状态与日志。
-- [ ] Config 读写 / 校验与独立 Storage 命名空间。
-- [ ] 每插件实例的 `AbortController` + `disposers` 栈 + 运行代次；能力接口按代次拒绝失效插件。
-- [ ] 宿主级 `dedupKey` 去重策略。
+位于 `packages/plugin/src/host/`：
 
-**A2：受控平台能力注入**
+- [x] Manifest 格式 `miubot.plugin.json` + `schemaVersion` 与 Schema 校验（`manifest.ts`）。
+- [x] 服务级 `PluginHost`：发现、加载、启动、停止、重启、状态与日志（`host.ts`）。
+- [x] 独立 Storage 命名空间（`storage.ts`，每插件一个 JSON 文件）。
+- [x] 每插件实例的 `AbortController` + `disposers` 栈 + 运行代次；能力接口按代次拒绝失效插件（`lifecycle.ts`、`context.ts`）。
+- [x] 宿主级 `dedupKey` 去重策略：仅 `dedupKey` 存在时去重。
+- [x] 入口允许 `.ts`（jiti 转换）与 `.js`/`.mjs`/`.cjs`（原生 import），不需要 `language` 字段。
+- [x] 验收：41 项测试覆盖 manifest、生命周期、上下文权限、宿主启停与示例插件。
 
-- [ ] Server 注入 `botId → QQBot` 解析与有界入站消息映射（`msgId` 反查）。
-- [ ] 实现 `PluginMessageSender` 桥接：权限检查 + 生命周期检查 + 复用 `OutboundChannel`。
-- [ ] 实现 `canHandleInteraction`，按插件启用状态、Bot 授权范围与交互匹配器判断。
-- [ ] 事件分发包装：默认过滤插件自身来源，限制触发链深度。
-- [ ] 验收：未授权插件不能发消息；已禁用插件的在途回调不能继续发送。
+**A2：受控平台能力注入（部分提前完成）**
 
-**A3：第一个真实插件**
+- [x] Server 注入 `botId → QQBot` 解析与有界入站消息映射（`apps/server/src/platform/plugin-bridge.ts`）。
+- [x] 实现 `PluginMessageSender` 桥接：权限检查 + 生命周期检查 + 复用 `OutboundChannel`。
+- [x] `canHandleInteraction` 由 `pluginHost.hasActiveHandler()` 提供，不再依赖订阅数量。
+- [ ] 事件分发包装：默认过滤插件自身来源，限制触发链深度（`origin` / `causationId` 已就位，过滤逻辑待接）。
+- [x] 验收：未授权插件不能发消息；已禁用插件的在途回调不能继续发送。
+- [ ] 工作台插件管理 API（受管理面安全前置条件约束）。
 
-- [ ] `miubot.welcome`：监听 `platform.group.bot_added`，读取欢迎文本配置，通过宿主接口发送。
-- [ ] 验收：重启、重复事件、禁用、Bot 断线、发送失败等行为正确。
+**A3：第一个真实插件（[现有]，2026-10-22 已完成）**
+
+- [x] `plugins/miubot.welcome/`：监听 `platform.group.bot_added`，从插件存储读取欢迎语并通过宿主接口发送。
+- [x] 验收：重启、重复事件、禁用、发送失败等行为正确（`apps/server/test` 之外的 6 项集成测试覆盖）。
+- [ ] 真实 QQ 环境人工验证：拉 Bot 入群后应收到一条欢迎语。
+
+**已知待办：**
+
+- 插件启停目前只在启动时按 `config.plugins.enabled` 执行一次，尚无运行时 API。
+- 示例插件用自身存储保存欢迎语默认值，等阶段 C 的 Schema Config 就位后应迁移到 manifest 配置声明。
 
 **范围冻结：** 阶段 A 只支持开发者手工放置、明确可信的本地插件，**不提供**网页上传安装、远程安装或插件市场。TypeScript 插件一旦被加载进 Node.js 进程就拥有与 Miubot 同等的进程权限——Manifest 权限声明、`ctx` 能力限制都不能把不可信 JavaScript 变成安全代码。
 

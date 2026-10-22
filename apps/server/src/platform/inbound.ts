@@ -1,3 +1,5 @@
+import type { Deduplicator, DeduplicatorOptions } from "@miubot/shared/platform/dedup";
+import { createDeduplicator } from "@miubot/shared/platform/dedup";
 import type {
 	InboundAttachment,
 	MessageSegment,
@@ -184,45 +186,9 @@ export function acceptInboundMessage(options: {
 	return { status: "accepted", message: normalized, dedupKey };
 }
 
-/**
- * 入站消息 id 去重。
- *
- * QQ Gateway 重连后会重投事件；没有去重时同一条消息可能触发重复回复与重复副作用。
- * 采用有界 LRU + TTL，避免长期占用内存。
- */
-export function createMessageDeduplicator(options: { maxEntries?: number; ttlMs?: number; now?: () => number } = {}) {
-	const maxEntries = options.maxEntries ?? 2_000;
-	const ttlMs = options.ttlMs ?? 10 * 60_000;
-	const now = options.now ?? Date.now;
-	const seen = new Map<string, number>();
-
-	return {
-		/** 首次出现返回 true；重复或已过期返回 false。 */
-		shouldProcess(key: string): boolean {
-			const timestamp = now();
-			for (const [entryKey, seenAt] of seen) {
-				if (timestamp - seenAt <= ttlMs) break;
-				seen.delete(entryKey);
-			}
-			const existing = seen.get(key);
-			if (existing !== undefined && timestamp - existing <= ttlMs) return false;
-			seen.delete(key);
-			seen.set(key, timestamp);
-			while (seen.size > maxEntries) {
-				const oldest = seen.keys().next().value;
-				if (oldest === undefined) break;
-				seen.delete(oldest);
-			}
-			return true;
-		},
-		/** 回滚一个已登记但未实际处理的 key，用于处理失败后允许重试。 */
-		forget(key: string): void {
-			seen.delete(key);
-		},
-		get size(): number {
-			return seen.size;
-		},
-	};
+/** 入站消息去重器。实现与插件宿主共用 `@miubot/shared/platform/dedup`。 */
+export function createMessageDeduplicator(options: DeduplicatorOptions = {}): Deduplicator {
+	return createDeduplicator(options);
 }
 
-export type MessageDeduplicator = ReturnType<typeof createMessageDeduplicator>;
+export type MessageDeduplicator = Deduplicator;

@@ -28,6 +28,7 @@
 			"packages/*/src/**/*.ts",
 			"packages/*/test/**/*.ts",
 			"apps/*/src/**/*.ts",
+			"plugins/*/**/*.ts",
 			"!**/node_modules/**/*",
 			"!example",
 			"!ui-ux-design",

@@ -1,4 +1,4 @@
-import type { PlatformEventBus } from "@miubot/shared/platform/events";
+import type { NormalizedPlatformEvent, PlatformEventBus } from "@miubot/shared/platform/events";
 import type { QQBot, QQBotInboundMessage } from "@tencent-connect/qqbot-nodejs";
 import { normalizeConnectionEvent, normalizeInteractionEvent, normalizeRawEvent } from "./events.ts";
 
@@ -8,9 +8,12 @@ import { normalizeConnectionEvent, normalizeInteractionEvent, normalizeRawEvent 
  * 用独立的窄接口取代「订阅者数量」判断：「有活跃订阅者」不等于「这个交互真的被处理了」。
  * 例如修仙插件监听所有按钮，却只认识 `cultivation:*`，此时不应声称已处理。
  *
+ * 传入已归一化的完整交互事件，宿主才能按 `payload.buttonId` / `buttonData`、`botId`、
+ * `scope` 和插件启用状态做精确匹配，而不是只知道「有个交互发生了」。
+ *
  * 返回 `true` 表示已有处理方接手，平台侧收到「成功」；返回 `false` 时回 `3`（忽略/未匹配）。
  */
-export type InteractionAckDecision = (event: { id: string; scope: "group" | "c2c" }) => boolean;
+export type InteractionAckDecision = (event: NormalizedPlatformEvent) => boolean;
 
 export type QqBotAdapterOptions = {
 	bot: QQBot;
@@ -23,7 +26,10 @@ export type QqBotAdapterOptions = {
 	onError?: (error: unknown) => void;
 	/**
 	 * 交互 ACK 决策。缺省时退化为「有 `platform.interaction` 订阅者即视为已处理」，
-	 * 仅适用于没有插件宿主的场合；接入 Plugin Host 后必须由宿主注入。
+	 * 仅适用于没有插件宿主的场合。
+	 *
+	 * **过渡实现：** 宿主接入事件分发后，`listenerCount` 会因永久注册的分发包装而恒 ≥ 1，
+	 * 该兜底必须由宿主注入的决策函数取代。
 	 */
 	canHandleInteraction?: InteractionAckDecision;
 };
@@ -63,7 +69,7 @@ export function attachQqBotEvents(options: QqBotAdapterOptions): void {
 	bot.on("interaction", async (_context, event) => {
 		const normalized = normalizeInteractionEvent(botId, event);
 		const handled = options.canHandleInteraction
-			? options.canHandleInteraction({ id: event.id, scope: normalized.scope === "group" ? "group" : "c2c" })
+			? options.canHandleInteraction(normalized)
 			: eventBus.listenerCount("platform.interaction") > 0;
 		try {
 			await eventBus.emit(normalized);

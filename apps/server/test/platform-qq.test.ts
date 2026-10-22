@@ -192,12 +192,55 @@ describe("qq bot event attachment", () => {
 		const event = { id: "interaction-2", scene: "group", group_openid: "g-1", data: { type: 11 } };
 		await handlers.get("interaction")?.(undefined as never, event as never);
 
-		expect(canHandleInteraction).toHaveBeenCalledWith({ id: "interaction-2", scope: "group" });
+		// 决策函数拿到的是完整归一化事件，而不是仅有 id 与 scope 的壳。
+		expect(canHandleInteraction).toHaveBeenCalledWith(
+			expect.objectContaining({ eventId: "interaction-2", type: "platform.interaction", botId: "bot-1" }),
+		);
 		expect(bot.acknowledgeInteraction).toHaveBeenLastCalledWith("interaction-2", 3);
 
 		canHandleInteraction.mockReturnValue(true);
 		await handlers.get("interaction")?.(undefined as never, event as never);
 		expect(bot.acknowledgeInteraction).toHaveBeenLastCalledWith("interaction-2", 0);
+	});
+
+	it("lets the host match on button data", async () => {
+		const platform = createQqPlatform({ onEventError: vi.fn(), onSendError: vi.fn(), resolveBotId: () => "bot-1" });
+		const handledIds: string[] = [];
+		const { bot, handlers } = fakeQqBot();
+		attachQqBotEvents({
+			bot,
+			botId: "bot-1",
+			eventBus: platform.eventBus,
+			onMessage: vi.fn(),
+			// 典型场景：大插件只认自己的按钮前缀，别的插件的按钮不能算已处理。
+			canHandleInteraction: (normalized) => {
+				const buttonId = normalized.payload.buttonId;
+				if (typeof buttonId !== "string" || !buttonId.startsWith("cultivation:")) return false;
+				handledIds.push(buttonId);
+				return true;
+			},
+		});
+
+		const mine = {
+			id: "i-1",
+			scene: "group",
+			group_openid: "g-1",
+			data: { type: 11, resolved: { button_id: "cultivation:upgrade" } },
+		};
+		const other = {
+			id: "i-2",
+			scene: "group",
+			group_openid: "g-1",
+			data: { type: 11, resolved: { button_id: "shop:buy" } },
+		};
+
+		await handlers.get("interaction")?.(undefined as never, mine as never);
+		expect(bot.acknowledgeInteraction).toHaveBeenLastCalledWith("i-1", 0);
+
+		await handlers.get("interaction")?.(undefined as never, other as never);
+		expect(bot.acknowledgeInteraction).toHaveBeenLastCalledWith("i-2", 3);
+
+		expect(handledIds).toEqual(["cultivation:upgrade"]);
 	});
 
 	it("forwards inbound messages and errors to the host", async () => {

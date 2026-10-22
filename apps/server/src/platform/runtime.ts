@@ -1,4 +1,4 @@
-import type { NormalizedPlatformEvent, PlatformEventBus } from "@miubot/shared/platform/events";
+import type { PlatformEventBus } from "@miubot/shared/platform/events";
 import { createPlatformEventBus } from "@miubot/shared/platform/events";
 import type { QQBot } from "@tencent-connect/qqbot-nodejs";
 import { createMessageDeduplicator, type MessageDeduplicator } from "./inbound.ts";
@@ -11,13 +11,6 @@ export type QqPlatformOptions = {
 	onSendError: (error: unknown) => void;
 	/** 由 Bot 实例反查配置 ID；查不到时退化为 `default`（单 Bot 场景无影响）。 */
 	resolveBotId: (bot: QQBot) => string | undefined;
-	/**
-	 * 为一次发送标注引发者。
-	 *
-	 * 缺省为 `agent`。插件桥接接入后（A2）由宿主提供，用 `plugin` + `originPluginId` 标记来源，
-	 * 使插件不会被自己发出的 `message.sent` 反复唤醒。
-	 */
-	resolveSendOrigin?: () => Pick<NormalizedPlatformEvent, "origin" | "originPluginId" | "causationId">;
 };
 
 export type QqPlatform = {
@@ -62,7 +55,9 @@ export function createQqPlatform(options: QqPlatformOptions): QqPlatform {
 						fallbackUsed: info.fallbackUsed,
 						...(info.target.msgId ? { msgId: info.target.msgId } : {}),
 					},
-					...(options.resolveSendOrigin?.() ?? { origin: "agent" }),
+					// 来源由调用方逐次标注；缺省当作宿主自身触发（Agent 回复）。
+					origin: info.origin ?? "agent",
+					...(info.originPluginId ? { originPluginId: info.originPluginId } : {}),
 					// 发送观察事件每次都不同，不参与去重。
 				});
 			},

@@ -1,0 +1,10 @@
+{
+	"schemaVersion": 1,
+	"id": "miubot.welcome",
+	"name": "入群欢迎",
+	"version": "0.1.0",
+	"entry": "./index.ts",
+	"description": "Bot 被拉进群聊后发送一条欢迎语",
+	"permissions": ["event:platform.group.bot_added", "message:send", "storage:read", "storage:write"],
+	"bots": ["*"]
+}

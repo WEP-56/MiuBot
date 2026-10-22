@@ -24,8 +24,22 @@ export interface OutboundChannelDependencies {
 		kind: "text" | "markdown" | "media";
 		messages: number;
 		fallbackUsed: boolean;
+		/** 引发本次发送的来源；由调用方逐次传入，避免用全局状态记录。 */
+		origin?: "agent" | "plugin" | "system";
+		originPluginId?: string;
 	}) => void;
 }
+
+/**
+ * 单次发送的来源标注。
+ *
+ * 逐次传入而不是用全局变量：多个插件并发发送时，全局状态会互相覆盖，
+ * 导致 `message.sent` 被标错来源、自激过滤失效。
+ */
+export type OutboundOriginMeta = {
+	origin?: "agent" | "plugin" | "system";
+	originPluginId?: string;
+};
 
 export type OutboundMessageResult = {
 	messages: number;
@@ -184,9 +198,19 @@ export type OutboundStream = {
 };
 
 export type OutboundChannel = {
-	sendText(target: ReplyTarget, content: string, options?: OutboundTextOptions): Promise<OutboundMessageResult>;
-	sendMarkdown(target: ReplyTarget, content: string, options?: OutboundTextOptions): Promise<OutboundMessageResult>;
-	sendMedia(target: ReplyTarget, media: OutboundMedia): Promise<OutboundMessageResult>;
+	sendText(
+		target: ReplyTarget,
+		content: string,
+		options?: OutboundTextOptions,
+		meta?: OutboundOriginMeta,
+	): Promise<OutboundMessageResult>;
+	sendMarkdown(
+		target: ReplyTarget,
+		content: string,
+		options?: OutboundTextOptions,
+		meta?: OutboundOriginMeta,
+	): Promise<OutboundMessageResult>;
+	sendMedia(target: ReplyTarget, media: OutboundMedia, meta?: OutboundOriginMeta): Promise<OutboundMessageResult>;
 	/** 尝试开启流式回复；群聊或缺少 msgId 时返回 `supported: false`。 */
 	openStream(target: ReplyTarget): OutboundStream;
 };
@@ -211,6 +235,7 @@ export function createOutboundChannel(deps: OutboundChannelDependencies): Outbou
 		target: ReplyTarget,
 		content: string,
 		options: OutboundTextOptions = {},
+		meta: OutboundOriginMeta = {},
 	): Promise<OutboundMessageResult> {
 		const chunkLimit = options.chunkLimit ?? 5000;
 		const allowFallback = options.allowProactiveFallback !== false;
@@ -240,7 +265,7 @@ export function createOutboundChannel(deps: OutboundChannelDependencies): Outbou
 			limiter.record(target);
 		}
 		const result = { messages: chunks.length, fallbackUsed };
-		deps.onSent?.({ target, kind: options.markdown ? "markdown" : "text", ...result });
+		deps.onSent?.({ target, kind: options.markdown ? "markdown" : "text", ...result, ...meta });
 		return result;
 	}
 
@@ -248,11 +273,16 @@ export function createOutboundChannel(deps: OutboundChannelDependencies): Outbou
 		target: ReplyTarget,
 		content: string,
 		options: OutboundTextOptions = {},
+		meta: OutboundOriginMeta = {},
 	): Promise<OutboundMessageResult> {
-		return sendText(target, content, { ...options, markdown: true });
+		return sendText(target, content, { ...options, markdown: true }, meta);
 	}
 
-	async function sendMedia(target: ReplyTarget, media: OutboundMedia): Promise<OutboundMessageResult> {
+	async function sendMedia(
+		target: ReplyTarget,
+		media: OutboundMedia,
+		meta: OutboundOriginMeta = {},
+	): Promise<OutboundMessageResult> {
 		let sendTarget = target;
 		let fallbackUsed = false;
 		if (!limiter.canReply(target)) {
@@ -273,7 +303,7 @@ export function createOutboundChannel(deps: OutboundChannelDependencies): Outbou
 		}
 		limiter.record(target);
 		const result = { messages: 1, fallbackUsed };
-		deps.onSent?.({ target, kind: "media", ...result });
+		deps.onSent?.({ target, kind: "media", ...result, ...meta });
 		return result;
 	}
 

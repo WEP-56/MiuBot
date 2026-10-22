@@ -6,6 +6,6 @@
 		"moduleResolution": "NodeNext",
 		"customConditions": ["source"]
 	},
-	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "apps/server/src/**/*"],
+	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "apps/server/src/**/*", "plugins/*/**/*.ts"],
 	"exclude": ["**/dist/**"]
 }
