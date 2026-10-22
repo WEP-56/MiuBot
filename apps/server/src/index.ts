@@ -113,7 +113,7 @@ const qqPlatform = createQqPlatform({
 const inboundReferences = createInboundReferenceStore();
 const pluginHost: PluginHost = createPluginHost({
 	// 内置插件优先：同名 id 以仓库内的为准，用户目录用于放自己的插件。
-	pluginsDir: [pluginsDir, builtinPluginsDir],
+	pluginsDir: [builtinPluginsDir, pluginsDir],
 	eventSource: qqPlatform.eventBus,
 	sendMessage: createPluginSendBridge(
 		{

@@ -225,6 +225,80 @@ describe("plugin context permissions", () => {
 		expect(sendMessage).not.toHaveBeenCalled();
 	});
 
+	it("rejects sends from a stale context after the plugin is restarted", async () => {
+		const { lifecycle, context, sendMessage } = setup(["message:send"]);
+		const staleContext = context;
+
+		// 模拟「停用 → 重新启用」：新实例处于 active，代次已递增。
+		await lifecycle.stop("测试重启");
+		lifecycle.begin();
+		lifecycle.activate();
+		expect(lifecycle.state).toBe("active");
+
+		// 关键：旧实例的 Handler 跨越 await 后恢复执行，此时新实例是 active。
+		// 只检查「当前是否 active」会放行，必须比较代次才能拒绝。
+		await expect(staleContext.messages.sendText("bot-1", { scope: "group", targetId: "g-1" }, "hi")).rejects.toThrow(
+			PluginInactiveError,
+		);
+		expect(sendMessage).not.toHaveBeenCalled();
+	});
+
+	it("rejects storage access from a stale context after restart", async () => {
+		const { lifecycle, context } = setup(["storage:read", "storage:write"]);
+		const staleContext = context;
+
+		await lifecycle.stop("测试重启");
+		lifecycle.begin();
+		lifecycle.activate();
+
+		await expect(staleContext.storage.get("k")).rejects.toThrow(PluginInactiveError);
+		await expect(staleContext.storage.set("k", 1)).rejects.toThrow(PluginInactiveError);
+		await expect(staleContext.storage.keys()).rejects.toThrow(PluginInactiveError);
+	});
+
+	it("keeps the stale view of signal and generation", async () => {
+		const { lifecycle, context } = setup(["event:*"]);
+		const staleSignal = context.signal;
+		expect(context.generation).toBe(0);
+
+		await lifecycle.stop("测试重启");
+		lifecycle.begin();
+		lifecycle.activate();
+
+		// 旧 Context 必须继续报告自己那一代，且信号保持 aborted，
+		// 不能因为新实例启用而"复活"。
+		expect(context.generation).toBe(0);
+		expect(staleSignal.aborted).toBe(true);
+		expect(lifecycle.generation).toBe(1);
+	});
+
+	it("rejects assertActive and onDispose from a stale context", async () => {
+		const { lifecycle, context } = setup([]);
+		const staleContext = context;
+
+		await lifecycle.stop("测试重启");
+		lifecycle.begin();
+		lifecycle.activate();
+
+		expect(() => staleContext.assertActive("处理事件")).toThrow(PluginInactiveError);
+		expect(() => staleContext.onDispose(() => {})).toThrow(PluginInactiveError);
+	});
+
+	it("does not deliver events to a stale subscription after restart", async () => {
+		const { lifecycle, context, subscribes } = setup(["event:*"]);
+		const handler = vi.fn();
+		context.events.subscribe("message.received", handler);
+		const staleWrapper = subscribes[0];
+
+		await lifecycle.stop("测试重启");
+		lifecycle.begin();
+		lifecycle.activate();
+
+		// 旧包装仍被总线持有：即使新实例已启用，也不能把事件投递给旧代次。
+		await staleWrapper?.handler({ botId: "bot-1" } as never, new AbortController().signal);
+		expect(handler).not.toHaveBeenCalled();
+	});
+
 	it("unsubscribes tracked event handlers when the plugin stops", async () => {
 		const { lifecycle, context, unsubscribed } = setup(["event:*"]);
 		context.events.subscribe("platform.raw", () => {});

@@ -54,6 +54,8 @@ export type PluginHostDependencies = {
 	eventDeduper?: Deduplicator;
 	/** 插件出站速率限制；缺省使用宽松默认值（每会话 10s / 5 次）。 */
 	sendRateLimit?: SendRateLimitOptions;
+	/** `setup()` 的超时上限，避免插件初始化挂起阻塞启动。默认 10 秒。 */
+	setupTimeoutMs?: number;
 };
 
 type PluginEntry = {
@@ -61,7 +63,6 @@ type PluginEntry = {
 	directory: string;
 	lifecycle: PluginLifecycle;
 	context?: PluginContext;
-	dispose?: () => void | Promise<void>;
 	error?: string;
 };
 
@@ -82,6 +83,15 @@ type RegisteredHandler = {
 export function createPluginHost(deps: PluginHostDependencies) {
 	const entries = new Map<string, PluginEntry>();
 	const eventDeduper = deps.eventDeduper ?? createDeduplicator();
+	const setupTimeoutMs = deps.setupTimeoutMs ?? 10_000;
+	/**
+	 * 每个插件的生命周期操作队列。
+	 *
+	 * 启停是异步的多步过程（加载入口、执行 setup、跑清理），管理界面连点「启用」
+	 * 会让同一个插件的 `setup()` 并发执行。按插件串行化而不是加全局锁：不同插件
+	 * 之间的启停互不阻塞。
+	 */
+	const operationQueues = new Map<string, Promise<unknown>>();
 	/**
 	 * 插件对平台事件的订阅包装。宿主只注册这一个订阅者，再自行扇出。
 	 *
@@ -89,6 +99,20 @@ export function createPluginHost(deps: PluginHostDependencies) {
 	 */
 	const eventHandlers = new Map<PlatformEventType | "*", Set<RegisteredHandler>>();
 	let subscribed = false;
+	/** 总线订阅的取消函数；`releaseSubscription()` 用它断开。 */
+	let busUnsubscribe: (() => void) | undefined;
+
+	/** 把操作排入该插件的队列，保证生命周期转换不并发。 */
+	function serialize<T>(id: string, task: () => Promise<T>): Promise<T> {
+		const previous = operationQueues.get(id) ?? Promise.resolve();
+		// 用 catch 兜住前一个操作的失败，否则一次启动失败会卡死后续排队。
+		const next = previous.catch(() => undefined).then(task);
+		operationQueues.set(
+			id,
+			next.catch(() => undefined),
+		);
+		return next;
+	}
 
 	/**
 	 * 把一条平台事件扇出给各插件的订阅者。
@@ -119,11 +143,23 @@ export function createPluginHost(deps: PluginHostDependencies) {
 		);
 	}
 
-	/** 首个插件启用时才接入总线，避免空数组也常驻一个订阅者。 */
+	/**
+	 * 首个插件启用时才接入总线，避免空数组也常驻一个订阅者。
+	 *
+	 * 保存取消函数：`stopAll()` 后总线里不应继续留着宿主的包装订阅。
+	 */
 	function ensureSubscribed(): void {
 		if (subscribed) return;
-		deps.eventSource.subscribe("*", (event, signal) => dispatch(event, signal));
+		busUnsubscribe = deps.eventSource.subscribe("*", (event, signal) => dispatch(event, signal));
 		subscribed = true;
+	}
+
+	/** 与总线断开：所有插件都停用后调用，避免空转分发。 */
+	function releaseSubscription(): void {
+		if (!subscribed) return;
+		busUnsubscribe?.();
+		busUnsubscribe = undefined;
+		subscribed = false;
 	}
 
 	function subscribePlatformEvent(
@@ -245,8 +281,12 @@ export function createPluginHost(deps: PluginHostDependencies) {
 		});
 	}
 
-	/** 启用一个已发现的插件。重复启用是幂等的，先停用再重建上下文。 */
+	/** 启用一个已发现的插件。重复启用是幂等的；并发调用会被队列串行化。 */
 	async function start(id: string): Promise<PluginStatus | undefined> {
+		return serialize(id, () => startNow(id));
+	}
+
+	async function startNow(id: string): Promise<PluginStatus | undefined> {
 		const entry = entries.get(id);
 		if (!entry) return undefined;
 		if (entry.error) return statusOf(entry);
@@ -287,14 +327,28 @@ export function createPluginHost(deps: PluginHostDependencies) {
 			logger: deps.logger,
 		});
 		entry.context = context;
-		entry.dispose = loaded.definition.dispose;
+		// 插件自定义的 dispose 登记在最前，因此清理时最后执行——此时能力已撤销，
+		// 它只能释放自己持有的外部资源（定时器、连接），不能继续发消息。
+		if (loaded.definition.dispose) {
+			const dispose = loaded.definition.dispose;
+			context.onDispose(() => dispose());
+		}
 
 		try {
 			await Promise.race([
 				loaded.definition.setup(context),
 				new Promise<never>((_, reject) => {
-					// setup 卡住时不能阻塞整个服务启动流程。
+					// 取消信号能打断等待，但插件若完全不理会信号，单靠它仍会永久挂起。
 					signal.addEventListener("abort", () => reject(new Error("插件 setup 被中止")), { once: true });
+				}),
+				// 独立超时：setup 一直不返回时也要放行启动流程。
+				new Promise<never>((_, reject) => {
+					const timer = setTimeout(
+						() => reject(new Error(`插件 setup 超时（${setupTimeoutMs}ms）`)),
+						setupTimeoutMs,
+					);
+					// 超时器不阻塞进程退出。
+					timer.unref?.();
 				}),
 			]);
 		} catch (error) {
@@ -311,33 +365,43 @@ export function createPluginHost(deps: PluginHostDependencies) {
 		return statusOf(entry);
 	}
 
-	/** 停用一个插件：取消信号 + 递增代次 + 执行清理。 */
+	/**
+	 * 停用一个插件。
+	 *
+	 * 顺序：先撤销能力（abort + 代次递增 + 标记 inactive），再执行清理。
+	 * 反过来会让插件在 `dispose()` 执行期间仍保有发送与存储能力——而 `dispose()`
+	 * 可能很慢甚至卡住，停用请求就形同没有生效。
+	 */
 	async function stop(id: string): Promise<PluginStatus | undefined> {
+		return serialize(id, () => stopNow(id));
+	}
+
+	async function stopNow(id: string): Promise<PluginStatus | undefined> {
 		const entry = entries.get(id);
 		if (!entry) return undefined;
-		const dispose = entry.dispose;
-		entry.dispose = undefined;
-		if (dispose) {
-			try {
-				await dispose();
-			} catch (error) {
-				deps.logger.warn(`插件 ${id} dispose 异常：${error instanceof Error ? error.message : String(error)}`);
-			}
-		}
+		// 插件自定义的 dispose 已登记为清理函数，与订阅取消一起按后进先出执行。
 		const { failures } = await entry.lifecycle.stop("请求停用");
 		entry.context = undefined;
 		for (const failure of failures) deps.logger.warn(`插件 ${id} 清理失败：${failure.error}`);
 		deps.logger.info(`插件已停用：${id}`);
+		// 没有剩余订阅者时断开总线，避免空转分发。
+		if (eventHandlers.size === 0) releaseSubscription();
 		return statusOf(entry);
 	}
 
-	/** 重新启用：先停再启，运行代次自动递增。 */
+	/**
+	 * 重新启用：先停再启。
+	 *
+	 * 整体排进队列，避免 `stop` 与 `start` 之间被另一个操作插入。
+	 */
 	async function restart(id: string): Promise<PluginStatus | undefined> {
-		await stop(id);
-		const entry = entries.get(id);
-		if (!entry) return undefined;
-		entry.error = undefined;
-		return start(id);
+		return serialize(id, async () => {
+			await stopNow(id);
+			const entry = entries.get(id);
+			if (!entry) return undefined;
+			entry.error = undefined;
+			return startNow(id);
+		});
 	}
 
 	/**
@@ -358,6 +422,8 @@ export function createPluginHost(deps: PluginHostDependencies) {
 
 	async function stopAll(): Promise<void> {
 		for (const id of [...entries.keys()]) await stop(id);
+		// 全部停用后与总线断开，避免留着空转的包装订阅。
+		releaseSubscription();
 	}
 
 	function list(): PluginStatus[] {

@@ -34,10 +34,11 @@ export type PluginContext = {
 	readonly storage: PluginStorage;
 	/** 登记清理函数，停用时按后进先出顺序执行。 */
 	onDispose(disposer: () => void | Promise<void>): void;
-	/** 插件被停用时触发。忽略它并不影响宿主拒绝后续能力调用。 */
+	/** 插件被停用时触发。是**本实例**的信号，不会被后续重启覆盖。 */
 	readonly signal: AbortSignal;
-	/** 当前运行代次；异步任务恢复执行后可用 `assertActive()` 校验自身是否仍有效。 */
+	/** 本实例的运行代次；异步任务恢复执行后可用 `assertActive()` 校验自身是否仍有效。 */
 	readonly generation: number;
+	/** 断言本实例仍然有效；跨越停用或重启边界后抛出 {@link PluginInactiveError}。 */
 	assertActive(action?: string): void;
 };
 
@@ -101,36 +102,44 @@ export function allowsBot(botIds: readonly string[], botId: string): boolean {
  *
  * 所有能力都包了「启用状态 + 代次」校验：插件被停用后，即使旧 Handler 仍在后台运行，
  * 调用 `sendText()` 也会得到 {@link PluginInactiveError}，而不是悄悄发出消息。
+ *
+ * 代次与取消信号在**构造时捕获**，之后不再读取 lifecycle 的当前值。否则旧实例跨越
+ * 「停用 → 重新启用」边界后，`assertActive()` 会看到新实例的 `active` 状态而放行，
+ * 旧 Handler 就重新获得了已经被撤销的能力。
  */
 export function createPluginContext(deps: PluginContextDependencies): PluginContext {
 	const { lifecycle, permissions } = deps;
+	/** 本 Context 所属的插件实例代次；跨代次调用一律拒绝。 */
+	const generation = lifecycle.generation;
+	/** 本实例的取消信号；停用后旧 Handler 看到的是自己那个已 abort 的信号。 */
+	const signal = lifecycle.signal;
 
 	function guard(action: string): void {
-		lifecycle.assertActive(action);
+		lifecycle.assertGeneration(generation, action);
 	}
 
-	/** 订阅的公共部分：权限、生命周期、Bot 范围三重校验，外加取消登记。 */
+	/** 订阅的公共部分：代次、权限、Bot 范围三重校验，外加取消登记。 */
 	function createSubscription(
 		type: PlatformEventType | "*",
 		handler: PlatformEventHandler,
 		options: { includeSelfOrigin?: boolean },
 	): () => void {
 		// 订阅必须在启用期间完成；停用后订阅即失效，避免遗留监听。
-		lifecycle.assertActive(`订阅事件 ${type}`);
+		guard(`订阅事件 ${type}`);
 		if (!allowsEvent(permissions, type)) {
 			throw new PluginInactiveError(deps.manifestId, `未声明权限 event:${type}`);
 		}
-		const generation = lifecycle.generation;
 		const unsubscribe = deps.subscribePlatformEvent(
 			deps.manifestId,
 			type,
-			(event: NormalizedPlatformEvent, signal) => {
+			(event: NormalizedPlatformEvent, eventSignal) => {
 				// 派发时再次校验：订阅可能在插件停用后仍被事件总线持有。
-				if (lifecycle.state !== "active" || lifecycle.generation !== generation) return;
+				// 与捕获的代次比较，跨代次一律不投递。
+				if (lifecycle.generation !== generation || lifecycle.state !== "active") return;
 				// Bot 范围校验：订阅路径同样受 manifest 的 `bots` 约束，
 				// 否则声明只服务某个 Bot 的插件仍会收到其它 Bot 的消息正文与群 OpenID。
 				if (!allowsBot(deps.botIds, event.botId)) return;
-				return handler(event, signal);
+				return handler(event, eventSignal);
 			},
 			options,
 		);
@@ -206,12 +215,15 @@ export function createPluginContext(deps: PluginContextDependencies): PluginCont
 			},
 		},
 		onDispose: (disposer) => {
+			// 与其它能力一致：跨越停用边界后，旧实例不得再登记新的清理函数。
+			guard("登记清理函数");
 			lifecycle.track(disposer);
 		},
-		signal: lifecycle.signal,
+		// 暴露本实例自己的信号与代次，而不是 lifecycle 的当前值。
+		signal,
 		get generation() {
-			return lifecycle.generation;
+			return generation;
 		},
-		assertActive: (action = "执行操作") => lifecycle.assertActive(action),
+		assertActive: (action = "执行操作") => guard(action),
 	};
 }

@@ -170,6 +170,148 @@ describe("plugin host", () => {
 		expect(h.sendMessage).toHaveBeenCalledOnce();
 	});
 
+	it("revokes capabilities before running dispose", async () => {
+		const h = await harness();
+		await writePlugin(h.pluginsDir, {
+			source: `
+export default {
+	id: "test.plugin",
+	setup(ctx) {
+		// dispose() 拿不到 setup 的参数，因此在 setup 里把 ctx 存起来。
+		globalThis.__disposeCtx = ctx;
+		globalThis.__disposeSaw = [];
+	},
+	async dispose() {
+		// 停用顺序的关键断言：dispose 执行时能力必须已经撤销。
+		// 若宿主先跑 dispose 再撤销，这两次调用都会成功。
+		try {
+			await globalThis.__disposeCtx.messages.sendText("bot-1", { scope: "group", targetId: "group-1" }, "清理期发送");
+			globalThis.__disposeSaw.push("send-ok");
+		} catch (error) {
+			globalThis.__disposeSaw.push(error.name);
+		}
+		try {
+			await globalThis.__disposeCtx.storage.set("k", 1);
+			globalThis.__disposeSaw.push("storage-ok");
+		} catch (error) {
+			globalThis.__disposeSaw.push(error.name);
+		}
+	},
+};
+`,
+		});
+		const host = createPluginHost(h.deps);
+		await host.startAll();
+		await host.stop("test.plugin");
+
+		expect(h.sendMessage).not.toHaveBeenCalled();
+		const seen = (globalThis as { __disposeSaw?: string[] }).__disposeSaw;
+		expect(seen).toEqual(["PluginInactiveError", "PluginInactiveError"]);
+	});
+
+	it("runs plugin dispose when stopped", async () => {
+		const h = await harness();
+		await writePlugin(h.pluginsDir, {
+			source: `
+export default {
+	id: "test.plugin",
+	setup(ctx) {
+		globalThis.__disposeCalls = 0;
+		ctx.onDispose(() => {
+			globalThis.__disposeCalls += 1;
+		});
+	},
+	async dispose() {
+		globalThis.__disposeCalls += 1;
+	},
+};
+`,
+		});
+		const host = createPluginHost(h.deps);
+		await host.startAll();
+		await host.stop("test.plugin");
+
+		// onDispose 登记与 manifest 的 dispose 都应执行。
+		expect((globalThis as { __disposeCalls?: number }).__disposeCalls).toBe(2);
+	});
+
+	it("serializes concurrent start calls for the same plugin", async () => {
+		const h = await harness();
+		await writePlugin(h.pluginsDir, {
+			source: `
+export default {
+	id: "test.plugin",
+	async setup() {
+		globalThis.__setups = (globalThis.__setups ?? 0) + 1;
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	},
+};
+`,
+		});
+		(globalThis as { __setups?: number }).__setups = 0;
+		const host = createPluginHost(h.deps);
+		await host.discover();
+
+		// 管理界面连点「启用」：并发调用不能让 setup 重复执行。
+		await Promise.all([host.start("test.plugin"), host.start("test.plugin"), host.start("test.plugin")]);
+
+		expect((globalThis as { __setups?: number }).__setups).toBe(1);
+		expect(host.get("test.plugin")?.state).toBe("active");
+	});
+
+	it("serializes start and stop without interleaving", async () => {
+		const h = await harness();
+		await writePlugin(h.pluginsDir, {
+			source: `
+export default {
+	id: "test.plugin",
+	async setup() {
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	},
+};
+`,
+		});
+		const host = createPluginHost(h.deps);
+		await host.startAll();
+
+		// 同时发起停止与重启：若交错执行，最终状态不确定。
+		await Promise.all([host.stop("test.plugin"), host.restart("test.plugin")]);
+		const state = host.get("test.plugin")?.state;
+		expect(["active", "inactive"]).toContain(state);
+	});
+
+	it("times out a setup that never settles", async () => {
+		const h = await harness();
+		await writePlugin(h.pluginsDir, {
+			source: `
+export default {
+	id: "test.plugin",
+	setup() {
+		return new Promise(() => {});
+	},
+};
+`,
+		});
+		const host = createPluginHost({ ...h.deps, setupTimeoutMs: 30 });
+		const statuses = await host.startAll();
+
+		// 插件初始化一直挂起时不能阻塞启动流程。
+		const status = statuses.find((item) => item.id === "test.plugin");
+		expect(status?.state).not.toBe("active");
+		expect(status?.error).toContain("超时");
+	});
+
+	it("unsubscribes from the bus once every plugin is stopped", async () => {
+		const h = await harness();
+		await writePlugin(h.pluginsDir);
+		const host = createPluginHost(h.deps);
+		await host.startAll();
+		expect(h.listenerCount()).toBeGreaterThan(0);
+
+		await host.stopAll();
+		expect(h.listenerCount()).toBe(0);
+	});
+
 	it("stops delivering after the plugin is disabled", async () => {
 		const h = await harness();
 		await writePlugin(h.pluginsDir);
