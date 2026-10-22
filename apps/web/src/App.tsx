@@ -8,13 +8,13 @@ import { Personas } from "./pages/Personas";
 import { Sessions } from "./pages/Sessions";
 import { Debug } from "./pages/Debug";
 import { Stickers } from "./pages/Stickers";
+import { Plugins } from "./pages/Plugins";
 import {
   Proactive,
   MCP,
   Skills,
   Memory,
   Scheduler,
-  Extensions,
   Logs,
   Settings,
   Tools,
@@ -52,7 +52,7 @@ export default function App() {
       case "tools":
         return <Tools />;
       case "extensions":
-        return <Extensions />;
+        return <Plugins />;
       case "logs":
         return <Logs />;
       case "settings":

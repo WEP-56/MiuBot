@@ -46,6 +46,7 @@ const advancedSubItems: { id: PageId; label: string }[] = [
   { id: "proactive", label: "主动行为" },
   { id: "mcp", label: "MCP" },
   { id: "skills", label: "Skills" },
+  { id: "extensions", label: "插件" },
   { id: "memory", label: "记忆与知识库" },
   { id: "scheduler", label: "定时任务" },
 ];

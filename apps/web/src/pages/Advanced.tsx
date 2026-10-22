@@ -202,20 +202,6 @@ export function Scheduler() {
   );
 }
 
-/* 扩展插件 */
-export function Extensions() {
-  return (
-    <div className="flex-1 h-full overflow-y-auto bg-black text-white p-7 select-none">
-      <div className="max-w-[760px] space-y-4">
-        <h1 className="text-[20px] font-bold text-white tracking-tight">扩展插件</h1>
-        <div className="sketch-card p-5 text-[13px] text-[#888888]">
-          已加载 3 个非 Agent 原生事件处理插件（Webhook 桥接、娱乐骰子、群事件监听）。
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* 运行日志 */
 export function Logs() {
   const [logs, setLogs] = useState<Array<{ time: string; level: "INFO" | "WARN" | "ERROR"; sessionId?: string; text: string }>>([]);

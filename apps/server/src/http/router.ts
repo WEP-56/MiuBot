@@ -3,6 +3,7 @@ import type { HttpContext } from "./context.ts";
 import { handleChatRoutes } from "./routes/chat.ts";
 import { handleConfigRoutes } from "./routes/config.ts";
 import { handlePersonaRoutes } from "./routes/personas.ts";
+import { handlePluginRoutes } from "./routes/plugins.ts";
 import { handleProactiveRoutes } from "./routes/proactive.ts";
 import { handleProviderRoutes } from "./routes/providers.ts";
 import { handleQqBotRoutes } from "./routes/qqbot.ts";
@@ -30,9 +31,9 @@ const handlers: RouteHandler[] = [
 	handleSessionRoutes,
 	handleProviderRoutes,
 	handleQqBotRoutes,
+	handlePluginRoutes,
 	handleChatRoutes,
 ];
-
 export async function dispatch(
 	ctx: HttpContext,
 	req: IncomingMessage,

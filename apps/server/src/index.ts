@@ -153,6 +153,15 @@ const httpContext: HttpContext = {
 	},
 	agentHost,
 	mcpRuntime,
+	plugins: {
+		list: pluginHost.list,
+		get: pluginHost.get,
+		discover: pluginHost.discover,
+		start: pluginHost.start,
+		stop: pluginHost.stop,
+		reload: pluginHost.reload,
+		directories: [builtinPluginsDir, pluginsDir],
+	},
 	stickers: { store: stickerStore, scheduleTagging: stickerTagging.schedule, resetTagging: stickerTagging.reset },
 	proactive: { metrics: proactive.metrics, decisions: proactive.decisions, sentToday: proactive.sentToday },
 	qq: {

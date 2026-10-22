@@ -25,6 +25,14 @@ export type PluginStatus = {
 	permissions: string[];
 	/** 当前持有的清理函数数量，用于诊断资源泄漏。 */
 	disposers: number;
+	/**
+	 * 条目来源。
+	 *
+	 * `invalid` / `duplicate` 是诊断占位：它们代表「某个目录坏了」或「某个目录被同 id 的
+	 * 插件压住了」，本身没有可运行的实现。管理界面据此禁用启停按钮，避免用户对着一个
+	 * 永远失败的行反复点「启用」。
+	 */
+	source: "plugin" | "invalid" | "duplicate";
 };
 
 export type PluginHostDependencies = {
@@ -62,6 +70,8 @@ type PluginEntry = {
 	manifest: PluginManifest;
 	directory: string;
 	lifecycle: PluginLifecycle;
+	/** 与 `PluginStatus.source` 同义，内部保留一份供状态快照使用。 */
+	source: PluginStatus["source"];
 	context?: PluginContext;
 	error?: string;
 };
@@ -195,6 +205,7 @@ export function createPluginHost(deps: PluginHostDependencies) {
 			...(entry.error ? { error: entry.error } : {}),
 			permissions: [...entry.manifest.permissions],
 			disposers: entry.lifecycle.disposerCount,
+			source: entry.source,
 		};
 	}
 
@@ -242,17 +253,21 @@ export function createPluginHost(deps: PluginHostDependencies) {
 				},
 				directory,
 				lifecycle,
+				source: "invalid",
 				error: message,
 			});
 			return;
 		}
 		if (entries.has(result.manifest.id)) {
+			const winner = entries.get(result.manifest.id)!;
+			// 同一个目录被再次扫描：这是重复调用 `discover()`，不是真冲突。
+			// 忽略而不是登记重复项，否则「重新扫描」会把每个插件都标成重复。
+			if (winner.directory === result.directory) return;
 			// 同一个 id 只认先扫描到的目录；重复项单独登记为诊断条目，
 			// 既不覆盖获胜者，也不静默吞掉冲突。
-			const winner = entries.get(result.manifest.id);
 			const id = `duplicate:${name}`;
 			if (entries.has(id)) return;
-			const message = `插件 id ${result.manifest.id} 与 ${winner?.directory ?? "另一个目录"} 重复，已忽略 ${directory}`;
+			const message = `插件 id ${result.manifest.id} 与 ${winner.directory} 重复，已忽略 ${directory}`;
 			const lifecycle = createPluginLifecycle(id);
 			lifecycle.fail(message);
 			entries.set(id, {
@@ -266,6 +281,7 @@ export function createPluginHost(deps: PluginHostDependencies) {
 				},
 				directory,
 				lifecycle,
+				source: "duplicate",
 				error: message,
 			});
 			return;
@@ -273,6 +289,7 @@ export function createPluginHost(deps: PluginHostDependencies) {
 		entries.set(result.manifest.id, {
 			manifest: result.manifest,
 			directory: result.directory,
+			source: "plugin",
 			lifecycle: createPluginLifecycle(result.manifest.id, {
 				onStateChange: (state, detail) => {
 					if (detail?.error) deps.logger.error(`插件 ${result.manifest.id} ${state}：${detail.error}`);
@@ -405,6 +422,41 @@ export function createPluginHost(deps: PluginHostDependencies) {
 	}
 
 	/**
+	 * 重新加载：先停，重读磁盘上的 manifest，再启。
+	 *
+	 * 与 `restart()` 的差别只在中间那一步——改了名称、版本、权限或入口的插件，
+	 * 不重启进程也能生效。只更新已登记的条目，不新增也不搬迁：`id` 变了意味着
+	 * 目录里放的是另一个插件，那是重新扫描（`discover()`）的事，不能让路由手里的
+	 * id 和条目 key 悄悄失配。
+	 */
+	async function reload(id: string): Promise<PluginStatus | undefined> {
+		return serialize(id, async () => {
+			await stopNow(id);
+			const entry = entries.get(id);
+			if (!entry) return undefined;
+			// 诊断占位条目没有可运行的实现，重读只会得到同一个错误。
+			if (entry.source !== "plugin") return statusOf(entry);
+			const result = await loadManifest(entry.directory);
+			if (!result.ok) {
+				const message = result.issues.map((issue) => `${issue.field}: ${issue.message}`).join("; ");
+				entry.error = message;
+				entry.lifecycle.fail(message);
+				deps.logger.error(`插件 ${id} 重载失败：${message}`);
+				return statusOf(entry);
+			}
+			if (result.manifest.id !== id) {
+				const message = `manifest 的 id 已改为 ${result.manifest.id}，需要重启服务才能重新登记`;
+				entry.error = message;
+				deps.logger.error(`插件 ${id} 重载失败：${message}`);
+				return statusOf(entry);
+			}
+			entry.manifest = result.manifest;
+			entry.error = undefined;
+			return startNow(id);
+		});
+	}
+
+	/**
 	 * 发现并启动插件。
 	 *
 	 * 传 `only` 时只启动这些 id（配置白名单）；不传则启动全部合法插件。
@@ -440,6 +492,7 @@ export function createPluginHost(deps: PluginHostDependencies) {
 		start,
 		stop,
 		restart,
+		reload,
 		startAll,
 		stopAll,
 		list,

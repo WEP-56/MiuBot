@@ -1,3 +1,4 @@
+import type { PluginStatus } from "@miubot/plugin/host/index";
 import type { McpRuntime } from "@miubot/plugin/tools/index";
 import type { AgentHost, PeerConfig, RuntimeSession } from "../agent-host.ts";
 import type { RuntimeLog } from "../logging.ts";
@@ -34,6 +35,20 @@ export type HttpContext = {
 	};
 	agentHost: AgentHost;
 	mcpRuntime: McpRuntime;
+	/**
+	 * 插件宿主。启停由宿主负责，是否允许启停由配置里的 `plugins.enabled/disabled` 决定，
+	 * 两者都要写——只改运行时状态的话，下次启动又会被配置翻回去。
+	 */
+	plugins: {
+		list(): PluginStatus[];
+		get(id: string): PluginStatus | undefined;
+		discover(): Promise<PluginStatus[]>;
+		start(id: string): Promise<PluginStatus | undefined>;
+		stop(id: string): Promise<PluginStatus | undefined>;
+		reload(id: string): Promise<PluginStatus | undefined>;
+		/** 插件根目录，按扫描优先级排列；工作台用它提示「插件该放哪里」。 */
+		directories: string[];
+	};
 	stickers: {
 		store: StickerStore;
 		scheduleTagging(delayMs?: number): void;

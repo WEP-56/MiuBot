@@ -1,20 +1,21 @@
-# 交接文档：Plugin 模块（阶段 A 已完成，管理面安全与 index.ts 拆分已补）
+# 交接文档：Plugin 模块（阶段 A / C 已完成，阶段 B 待做）
 
 > 用途：因会话上下文过长，在新会话继续开发时先读这份。
-> 最后更新：2026-10-22 21:15
+> 最后更新：2026-10-22 21:55
 
 ---
 
 ## 一、当前状态
 
-**阶段 A（事件型插件）已完成并推送。阶段 C 的前置任务「管理面安全」已完成。`index.ts` 职责拆分已完成（2160 → 约 220 行）。**
+**阶段 A（事件型插件）已完成并推送。阶段 C（插件管理 API + 工作台插件页）已完成。管理面安全与 `index.ts` 职责拆分已完成（2160 → 约 215 行）。下一步是阶段 B（插件注册 Agent Tool）。**
 
-验证门禁全绿：`npm run check` / `npm run lint` / `npm test`（**184 files / 1737 tests**）。
+验证门禁全绿：`npm run check` / `npm run lint` / `npm test`（**185 files / 1750 tests**）。
 
-最近五次提交：
+最近六次提交：
 
 | commit | 内容 |
 |---|---|
+| 本次 | feat: 插件管理 API 与工作台插件页（阶段 C） |
 | `86dc6af` | refactor(server): 拆分运行时状态、QQ 流水线与前置逻辑 |
 | `705c9d8` | refactor(server): 管理 API 路由从 index.ts 拆出 |
 | `8ae1731` | feat(server): 管理 API 本机认证与 Origin 收敛 |
@@ -29,7 +30,7 @@
 |---|---|
 | `src/http/server.ts` | CORS 回写 + `api-security` 三层校验 + OPTIONS + 会话下发 + 404/500 边界 |
 | `src/http/router.ts` | 路由表（顺序即匹配优先级） |
-| `src/http/routes/*.ts` | 11 个按域拆分的路由模块（config/tools/proactive/stickers/skills/personas/sessions/providers/qqbot/chat/system） |
+| `src/http/routes/*.ts` | 12 个按域拆分的路由模块（config/tools/proactive/stickers/skills/personas/sessions/providers/qqbot/plugins/chat/system） |
 | `src/http/context.ts` | 路由依赖的运行时状态访问器（`config`/`sessions` 需整体替换，统一 get/replace） |
 | `src/app-state.ts` | 配置/会话/对象配置/主动发言额度：内存状态 + 持久化 + 会话与对象工厂 |
 | `src/qq/connection.ts` | Gateway 连接、扫码、连接状态、凭据校验 |
@@ -135,17 +136,31 @@
 
 新增插件管理端点时**不需要再考虑认证**：`handler` 入口已经统一校验，新路由自动受保护。唯一注意点是 `json()` 不再写 CORS 头，CORS 由 `handler` 按请求 Origin 回写。
 
-### 2. 插件管理 API（下一步）
+### 2. 插件管理 API（✅ 已完成）
 
-`GET /api/plugins`（list + status）、`POST /api/plugins/:id/{enable,disable,reload}`。
+`apps/server/src/http/routes/plugins.ts`，已在 `router.ts` 注册，`HttpContext` 增加 `plugins`（宿主 + 插件目录）。
 
-`PluginHost` 已提供 `list()` / `get()` / `start()` / `stop()` / `restart()`，直接注入即可。
+| 端点 | 行为 |
+|---|---|
+| `GET /api/plugins` | 插件清单 + 配置放行状态（`enabled`）+ `settings` + 插件目录 |
+| `POST /api/plugins/discover` | 重新扫描插件目录（幂等，`discover()` 可重复调用） |
+| `POST /api/plugins/:id/enable` | 从 `disabled` 摘除、必要时补进白名单、启动；失败时自动重试一次干净加载 |
+| `POST /api/plugins/:id/disable` | 写 `disabled`、从白名单摘除、停止 |
+| `POST /api/plugins/:id/reload` | 停 → 重读 manifest → 启；配置里禁用的插件返回 409 |
 
-落点已就绪：新建 `apps/server/src/http/routes/plugins.ts`，在 `router.ts` 的路由表里注册；`HttpContext` 增加 `plugins` 字段（宿主实例 + `PluginSettings` 读写）。认证 / CORS / 错误边界无需碰。
+要点：
 
-### 3. Web 工作台插件页
+- **配置与宿主必须一起改**。只调宿主不改 `config.plugins`，重启后插件会按旧配置复活或再次被压制。
+- `PluginStatus` 新增 `source: "plugin" | "invalid" | "duplicate"`：后两者是诊断占位（坏目录 / 同 id 冲突），启停被拒并回 400。
+- `PluginHost` 新增 `reload()`：改名/改版本/改权限/改入口不必重启进程。`id` 变了只报错要求重启，不悄悄搬迁条目。
+- 修掉一个潜在缺陷：`discover()` 原先不幂等，第二次扫描会把每个已登记插件判成「重复」。现在同目录重扫直接跳过。
+- 单测 `apps/server/test/plugins-route.test.ts`（13 项），已按 §九 做过反向验证（去掉幂等跳过、去掉 manifest 重读后测试转红）。
 
-`apps/web/src/App.tsx` 加插件页：列表、状态、版本、错误、启停按钮。
+### 3. Web 工作台插件页（✅ 已完成）
+
+`apps/web/src/pages/Plugins.tsx`，入口在侧边栏「高级配置 → 插件」（`extensions` 页签，原占位内容已删除）。
+
+列表展示名称/版本/状态/权限/清理函数数/错误；按钮为启用 / 停用 / 重载（禁用条目上重载置灰），顶部「重新扫描」，底部显示插件目录与配置中的禁用清单。
 
 ### 4. 阶段 B：插件注册 Agent Tool
 
