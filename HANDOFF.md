@@ -15,7 +15,7 @@
 
 | commit | 内容 |
 |---|---|
-| 本次 | feat(server): 管理 API 本机认证与 Origin 收敛 |
+| `8ae1731` | feat(server): 管理 API 本机认证与 Origin 收敛 |
 | `d08d0f7` | fix(plugin): 收紧生命周期与能力撤销 |
 | `c7c956d` | feat(plugin): 服务级 Plugin Host 与受控平台能力 |
 | `9906310` | feat(server): 平台契约下沉 shared 并稳定化事件语义 |
