@@ -15,7 +15,7 @@
 
 | commit | 内容 |
 |---|---|
-| 本次 | refactor(server): 拆分运行时状态、QQ 流水线与前置逻辑 |
+| `86dc6af` | refactor(server): 拆分运行时状态、QQ 流水线与前置逻辑 |
 | `705c9d8` | refactor(server): 管理 API 路由从 index.ts 拆出 |
 | `8ae1731` | feat(server): 管理 API 本机认证与 Origin 收敛 |
 | `d08d0f7` | fix(plugin): 收紧生命周期与能力撤销 |
