@@ -1,6 +1,6 @@
 # Miubot Plugin Core：插件系统设计与开发草案
 
-> **状态：设计草案；平台层底座已落地（2026-10-22），Plugin Host 未开始**  
+> **状态：设计草案；阶段 0 / A（平台层 + 服务级 Plugin Host）已完成，管理面安全已完成，下一步是插件管理 API 与工作台插件页**  
 > **建议入库位置：** `docs/07-高级配置/Plugin.md`（需与旧文档 `07-扩展插件与自动化规则.md` 合并，避免同主题两套文档并存）  
 > **依据：** 2026-10-21 查阅的 [WEP-56/MiuBot](https://github.com/WEP-56/MiuBot) 公开 `main` 分支，以及当前产品讨论；本地未推送的实现可能更新。  
 > **相关文档：** [旧版扩展插件与自动化规则](07-扩展插件与自动化规则.md)、`../../AGENTS.md`、`../10-技术架构/04-Pi移植记录.md`
@@ -519,15 +519,22 @@ Agent 主动发言是 Agent 行为策略，插件定时任务是通用调度机�
 
 **注意：** 目前公开仓库 `apps/server/src/index.ts` 的管理 API 使用固定路由。新增 Plugin API 应通过轻量路由模块装配，而不是继续无限扩展一个超级 `index.ts`；但也不必为了插件引入完整新 Web 框架。
 
-**管理面安全前置条件：** 公开源码目前可见通用 `OPTIONS` 响应设置 `Access-Control-Allow-Origin: *`，而服务通常监听本机地址。后续一旦允许远程访问、插件安装、修改插件密钥和管理员凭据，就必须重新梳理**管理 API 的身份认证、浏览器 Origin / CORS、CSRF、监听地址与远程暴露策略**。不能因为初期绑定 loopback 就假定管理接口天然安全，也不能把插件自身管理员密码复用为 Miubot 管理凭据。
+**管理面安全前置条件（✅ 2026-10-22 已完成）：** 原状是通用 `OPTIONS` 响应设置 `Access-Control-Allow-Origin: *`、`/api/*` 无认证、服务只监听本机地址。现已实现 `apps/server/src/api-security.ts`：
 
-**独立安全任务（优先级已提升，与插件解耦）：** 现状不只是 CORS 问题——`/api/*` **无任何认证**，且任意网页都因 `Access-Control-Allow-Origin: *` 能跨域读取：
+- `Host` 只接受回环地址且端口必须匹配服务端口（挡 DNS rebinding）。
+- `Origin` 收敛到 `127.0.0.1` / `localhost` 的服务端口与 `5173`，`Origin: null`（本地 `file://`）拒绝；不再有任何 `*` CORS 响应。
+- 令牌文件 `apps/server/.miubot/api-token`，工作台通过 `POST /api/auth/session` 换 `HttpOnly; SameSite=Strict` Cookie；支持 `Authorization: Bearer` / `X-Miubot-Token` 供脚本使用。
+- 免认证仅 `GET /api/health` 与会话下发端点；`OPTIONS` 预检放行但仍过 Host / Origin。
+
+**因此插件管理 API 不需要自带认证**，但必须遵守：新增端点统一走 `handler` 入口，配置中的 secret 仍要在响应里遮蔽、不进日志。详见 `docs/10-技术架构/02-消息处理与安全.md`。
+
+**原始问题记录（已修复，留档）：**
 
 - `GET /api/sessions/:id` 返回完整会话，含全部聊天记录（列表接口的 `publicSession` 脱敏了，详情接口没有）。
 - `GET /api/logs` 返回运行日志。
 - `GET /api/peers` 返回所有群/用户 OpenID 与备注名。
 
-`publicConfig` 脱敏了 `apiKey`，但不改变上述三条。这有独立修复价值，不依赖插件系统。修复要点：**敏感 GET 同样需要认证**（Origin 检查不是认证，也不能阻止非浏览器客户端）；允许的 Origin 收敛到开发 Web 地址；修改类请求落实 CSRF 或等效来源保护；保持本机绑定并检查 Host / DNS rebinding 风险。**在实现插件配置管理 API、密钥读取或插件安装接口之前必须完成。**
+`publicConfig` 脱敏了 `apiKey`，但不改变上述三条。修复要点：**敏感 GET 同样需要认证**（Origin 检查不是认证，也不能阻止非浏览器客户端）；允许的 Origin 收敛到开发 Web 地址；修改类请求落实 CSRF 或等效来源保护；保持本机绑定并检查 Host / DNS rebinding 风险。**在实现插件配置管理 API、密钥读取或插件安装接口之前必须完成。**
 
 ## 14. 实际开发顺序
 
@@ -609,6 +616,8 @@ Agent 主动发言是 Agent 行为策略，插件定时任务是通用调度机�
 - [ ] 内置 Tools **不强制迁移成插件包**，先验证新旧工具共存。
 
 ### 阶段 C：工作台管理闭环（P0→P1）
+
+**前置：管理面安全（✅ 2026-10-22 已完成，见 §13）。**
 
 - [ ] 插件列表、状态、启停、错误与版本展示。
 - [ ] Schema Config 表单生成、校验、secret 遮蔽、重启提示。

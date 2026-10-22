@@ -15,6 +15,7 @@ import { type QrConnectCredentials, startQrConnect } from "@tencent-connect/qqbo
 import { QQBot, type QQBotInboundMessage } from "@tencent-connect/qqbot-nodejs";
 import QRCode from "qrcode";
 import { createAgentHost, type PeerConfig, type RuntimeSession } from "./agent-host.ts";
+import { createApiSecurity, loadOrCreateAuthToken } from "./api-security.ts";
 import { downloadImage, prepareInboundMedia } from "./media.ts";
 import { normalizeMessageEvent } from "./platform/events.ts";
 import { acceptInboundMessage, describeQuoteContext } from "./platform/inbound.ts";
@@ -54,6 +55,13 @@ const builtinPluginsDir = join(root, "..", "..", "plugins");
 /** 插件存储命名空间根目录；每个插件一个 JSON 文件。 */
 const pluginStorageDir = join(dataDir, "plugin-data");
 const port = Number(process.env.MIUBOT_PORT ?? 8787);
+/** 管理 API 令牌文件：只有本机进程可读，浏览器通过 HttpOnly Cookie 使用它。 */
+const authTokenPath = join(dataDir, "api-token");
+const apiSecurity = createApiSecurity({
+	port,
+	token: await loadOrCreateAuthToken(authTokenPath),
+	extraOrigins: (process.env.MIUBOT_ALLOWED_ORIGINS ?? "").split(","),
+});
 
 let config: AppConfig = createDefaultConfig();
 const mcpRuntime = new McpRuntime();
@@ -1097,11 +1105,14 @@ async function processQQMessage(bot: QQBot, botConfig: QqBotConfig, message: QQB
 	});
 }
 
+function headerValue(value: string | string[] | undefined): string | undefined {
+	return Array.isArray(value) ? value[0] : value;
+}
+
 function json(res: ServerResponse, status: number, body: unknown): void {
 	res.writeHead(status, {
 		"content-type": "application/json; charset=utf-8",
 		"cache-control": "no-store",
-		"access-control-allow-origin": "*",
 	});
 	res.end(JSON.stringify(body));
 }
@@ -1298,22 +1309,47 @@ function startQr(nickname: string): void {
 }
 
 async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
-	const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+	const origin = headerValue(req.headers.origin);
+	const corsOrigin = apiSecurity.corsOrigin(origin);
+	if (corsOrigin) {
+		// 只对白名单 Origin 回写 CORS 头；其余请求一个都不给，浏览器读不到响应体。
+		res.setHeader("access-control-allow-origin", corsOrigin);
+		res.setHeader("vary", "origin");
+	}
+	const pathname = (req.url ?? "/").split("?")[0] ?? "/";
+	const decision = apiSecurity.authorize({
+		method: req.method ?? "GET",
+		host: headerValue(req.headers.host),
+		origin,
+		authorization: headerValue(req.headers.authorization),
+		tokenHeader: headerValue(req.headers["x-miubot-token"]),
+		cookie: headerValue(req.headers.cookie),
+		secFetchSite: headerValue(req.headers["sec-fetch-site"]),
+		pathname,
+	});
+	if (!decision.ok) return json(res, decision.status, { ok: false, message: decision.message });
 	if (req.method === "OPTIONS") {
 		res.writeHead(204, {
-			"access-control-allow-origin": "*",
-			"access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
-			"access-control-allow-headers": "content-type",
+			"access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+			"access-control-allow-headers": "content-type,x-miubot-token",
+			"access-control-max-age": "600",
 		});
 		res.end();
 		return;
 	}
+	// 用固定 base 解析路径：`Host` 头已在上面校验，但仍不拿它拼 URL，避免解析期注入。
+	const url = new URL(req.url ?? "/", "http://127.0.0.1");
 	try {
 		if (url.pathname === "/api/health")
 			return json(res, 200, {
 				ok: true,
 				qq: [...qqStates.values()].find((state) => state.phase === "connected")?.phase ?? "disconnected",
 			});
+		// 工作台启动时换取会话 Cookie；令牌本身不返回给前端 JS，只存在于 HttpOnly Cookie 中。
+		if (url.pathname === "/api/auth/session" && req.method === "POST") {
+			res.setHeader("set-cookie", apiSecurity.sessionCookie());
+			return json(res, 200, { ok: true });
+		}
 		if (url.pathname === "/api/config" && req.method === "GET") return json(res, 200, publicConfig());
 		if (url.pathname === "/api/config" && req.method === "PUT") {
 			const next = await body(req);
@@ -2119,6 +2155,7 @@ log("INFO", `插件加载完成：${activePluginCount}/${discoveredPlugins.lengt
 const activeBot = config.qqBots.find((bot) => bot.enabled);
 if (activeBot?.appId && activeBot.appSecret) void connectQQ(activeBot);
 log("INFO", "Miubot Server 已启动");
+log("INFO", `管理 API 仅接受本机工作台访问；令牌文件：${authTokenPath}`);
 createServer((req, res) => {
 	void handler(req, res);
 }).listen(port, "127.0.0.1", () => console.log(`Miubot server listening on http://127.0.0.1:${port}`));

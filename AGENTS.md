@@ -23,7 +23,7 @@ packages/
 ## 快速入口
 
 - 项目概览与开发命令：`README.md`
-- 服务端说明与启动：`apps/server/README.md`；`apps/server/src/index.ts` 是进程入口与应用组合根，负责启动流程、HTTP 路由和 QQ 消息处理；`apps/server/src/agent-host.ts` 装配 AgentSession、扩展和工具授权；`apps/server/src/runtime.ts` 提供配置类型、默认值及通用模型请求逻辑。
+- 服务端说明与启动：`apps/server/README.md`；`apps/server/src/index.ts` 是进程入口与应用组合根，负责启动流程、HTTP 路由和 QQ 消息处理；`apps/server/src/agent-host.ts` 装配 AgentSession、扩展和工具授权；`apps/server/src/runtime.ts` 提供配置类型、默认值及通用模型请求逻辑；`apps/server/src/api-security.ts` 是 `/api/*` 的本机认证（Host / Origin / 令牌），新增或调用管理端点都要经过它。
 - Web 工作台说明与启动：`apps/web/README.md`；React 入口是 `apps/web/src/App.tsx`
 - Pi 迁移边界：`docs/10-技术架构/04-Pi移植记录.md`
 - 当前产品进度：`docs/00-产品与全局/03-路线图.md`

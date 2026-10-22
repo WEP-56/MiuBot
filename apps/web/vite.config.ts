@@ -9,5 +9,6 @@ const dirname = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
 	plugins: [react(), tailwindcss(), viteSingleFile()],
 	resolve: { alias: { "@": path.resolve(dirname, "src") } },
-	server: { port: 5173, proxy: { "/api": "http://127.0.0.1:8787" } },
+	// 代理必须改写 Host：服务端按 Host 判定「只接受本机回环地址」，否则会拿到 403。
+	server: { port: 5173, proxy: { "/api": { target: "http://127.0.0.1:8787", changeOrigin: true } } },
 });
