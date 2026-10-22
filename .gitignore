@@ -33,3 +33,6 @@ plans/
 # Local reference material, not part of the repository
 example/
 ui-ux-design/
+
+# WorkBuddy 工作区记忆与本地缓存
+.workbuddy/

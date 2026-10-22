@@ -23,7 +23,12 @@ packages/
 ## 快速入口
 
 - 项目概览与开发命令：`README.md`
-- 服务端说明与启动：`apps/server/README.md`；`apps/server/src/index.ts` 是进程入口与应用组合根，负责启动流程、HTTP 路由和 QQ 消息处理；`apps/server/src/agent-host.ts` 装配 AgentSession、扩展和工具授权；`apps/server/src/runtime.ts` 提供配置类型、默认值及通用模型请求逻辑；`apps/server/src/api-security.ts` 是 `/api/*` 的本机认证（Host / Origin / 令牌），新增或调用管理端点都要经过它。
+- 服务端说明与启动：`apps/server/README.md`；`apps/server/src/index.ts` 是进程入口与组合根，只做装配与启动，不再承载路由或业务流程分支。
+- 服务端模块边界（`apps/server/src/`）：
+  - `http/` 管理 API：`server.ts`（CORS + `api-security` 校验 + 404/500 边界）、`router.ts`（路由表，顺序即优先级）、`routes/*.ts`（按域拆分）、`context.ts`（路由依赖的运行时状态访问器）、`response.ts` / `present.ts`。
+  - `app-state.ts` 配置/会话/对象配置的内存状态与持久化；`logging.ts` 运行日志；`api-security.ts` 本机认证（Host / Origin / 令牌）。
+  - `qq/connection.ts` 连接、扫码、连接状态；`qq/inbound.ts` 入站消息主流程；`proactive.ts` 群聊插话；`sticker-tagging.ts` 表情包自动打标。
+  - `agent-host.ts` 装配 AgentSession、扩展与工具授权；`runtime.ts` 配置类型、默认值与通用模型请求；`platform/` 平台契约与 QQ 适配。
 - Web 工作台说明与启动：`apps/web/README.md`；React 入口是 `apps/web/src/App.tsx`
 - Pi 迁移边界：`docs/10-技术架构/04-Pi移植记录.md`
 - 当前产品进度：`docs/00-产品与全局/03-路线图.md`
@@ -65,6 +70,7 @@ packages/
 6. 修改跨模块功能时，先检查现有公开接口，避免直接访问其他模块的内部实现。
 7. 发现现有代码违反架构约束时，不要继续模仿；在任务范围内修正，超出范围则报告。
 8. 新增功能时同步删除本次修改造成的废弃注册和重复实现，避免保留两套路径。
+9. 管理 API 端点只在 `apps/server/src/http/routes/` 新增并注册到 `router.ts`；`index.ts` 是组合根，不再累积路由分支。认证与 CORS 由 `http/server.ts` 统一处理，`json()` 里不得回写 `Access-Control-Allow-Origin`。
 
 ### 验证
 

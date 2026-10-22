@@ -1,26 +1,49 @@
-# 交接文档：Plugin 模块（阶段 A 已完成，管理面安全已补）
+# 交接文档：Plugin 模块（阶段 A 已完成，管理面安全与 index.ts 拆分已补）
 
 > 用途：因会话上下文过长，在新会话继续开发时先读这份。
-> 最后更新：2026-10-22 21:00
+> 最后更新：2026-10-22 21:15
 
 ---
 
 ## 一、当前状态
 
-**阶段 A（事件型插件）已完成并推送。阶段 C 的前置任务「管理面安全」也已完成。**
+**阶段 A（事件型插件）已完成并推送。阶段 C 的前置任务「管理面安全」已完成。`index.ts` 职责拆分已完成（2160 → 约 220 行）。**
 
-验证门禁全绿：`npm run check` / `npm run lint` / `npm test`（**183 files / 1732 tests**）。
+验证门禁全绿：`npm run check` / `npm run lint` / `npm test`（**184 files / 1737 tests**）。
 
-最近四次提交：
+最近五次提交：
 
 | commit | 内容 |
 |---|---|
+| 本次 | refactor(server): 拆分运行时状态、QQ 流水线与前置逻辑 |
+| `705c9d8` | refactor(server): 管理 API 路由从 index.ts 拆出 |
 | `8ae1731` | feat(server): 管理 API 本机认证与 Origin 收敛 |
 | `d08d0f7` | fix(plugin): 收紧生命周期与能力撤销 |
 | `c7c956d` | feat(plugin): 服务级 Plugin Host 与受控平台能力 |
-| `9906310` | feat(server): 平台契约下沉 shared 并稳定化事件语义 |
 
-### 管理面安全（本次完成）
+### index.ts 拆分（本次完成）
+
+`index.ts` 现在只剩路径常量、子系统装配、启动流程，约 220 行。其余按职责落到：
+
+| 文件 | 职责 |
+|---|---|
+| `src/http/server.ts` | CORS 回写 + `api-security` 三层校验 + OPTIONS + 会话下发 + 404/500 边界 |
+| `src/http/router.ts` | 路由表（顺序即匹配优先级） |
+| `src/http/routes/*.ts` | 11 个按域拆分的路由模块（config/tools/proactive/stickers/skills/personas/sessions/providers/qqbot/chat/system） |
+| `src/http/context.ts` | 路由依赖的运行时状态访问器（`config`/`sessions` 需整体替换，统一 get/replace） |
+| `src/app-state.ts` | 配置/会话/对象配置/主动发言额度：内存状态 + 持久化 + 会话与对象工厂 |
+| `src/qq/connection.ts` | Gateway 连接、扫码、连接状态、凭据校验 |
+| `src/qq/inbound.ts` | 入站消息主流程（去重 → 事件 → 采集 → 插话/回复） |
+| `src/proactive.ts` | 群聊插话：聚合窗口、全局闸门、冷却、判断模型、发送前复核 |
+| `src/sticker-tagging.ts` | 表情包自动打标（单飞、对话优先、最多重试 3 次） |
+| `src/logging.ts` / `src/util/time.ts` | 运行日志；日期键 |
+| `src/session-context.ts` / `src/target-queue.ts` | 会话提示/发图上下文；按目标串行队列 |
+
+顺带修掉一个缺陷：`PUT /api/personas/active` 原先排在 `/api/personas/:id` 之后，`active` 被当成人格 id 匹配，工作台切换人格一直 404。
+
+验证方式：用 28 个请求的 curl 矩阵对重构前后逐条比对（状态码 + 响应体；日志/决策/健康这类随时间变化的只比结构），除 QQ 头像 CDN 参数由平台轮换外完全一致；新增 `apps/server/test/qq-inbound.test.ts`（4 项，覆盖 @ 回复、重复投递、非 @ 走插话、`/new`），并做过「断掉 prompt 让测试失败」的反向验证。
+
+### 管理面安全（前一轮完成）
 
 `apps/server/src/api-security.ts`，三层校验：`Host` 回环 + 端口匹配（挡 DNS rebinding）、`Origin` 白名单（挡跨域读取，`ACAO: *` 已删除）、令牌（`Authorization` / `X-Miubot-Token` / `miubot_token` HttpOnly Cookie）。
 
@@ -118,6 +141,8 @@
 
 `PluginHost` 已提供 `list()` / `get()` / `start()` / `stop()` / `restart()`，直接注入即可。
 
+落点已就绪：新建 `apps/server/src/http/routes/plugins.ts`，在 `router.ts` 的路由表里注册；`HttpContext` 增加 `plugins` 字段（宿主实例 + `PluginSettings` 读写）。认证 / CORS / 错误边界无需碰。
+
 ### 3. Web 工作台插件页
 
 `apps/web/src/App.tsx` 加插件页：列表、状态、版本、错误、启停按钮。
@@ -138,8 +163,7 @@
 | P1 | `host.ts` | `hasActiveHandler()` 只判断有无订阅者，不能判断具体按钮是否被某插件认领（`cultivation:*` 这类） |
 | P2 | `plugin-bridge.ts` | `inboundReferences.take()` 只能消费一次；同一入站消息触发多个插件回复时，只有第一个拿到被动回复锚点 |
 | P2 | `storage.ts` | `readAll()` 吞掉解析异常返回 `{}`，损坏文件下次写入会被覆盖（数据丢失） |
-| P3 | `index.ts` 路由 | 管理路由仍全部堆在 `handler` 里（2000+ 行单文件），插件 API 落地前建议先抽路由模块 |
-| — | 全局 | Tool 列表统一（`agent-host.ts` 的 `nativeToolNames` vs `index.ts` 的 `toolNames`/`toolCatalog`），阶段 B 处理 |
+| — | 全局 | Tool 列表统一（`agent-host.ts` 的 `nativeToolNames` vs `http/present.ts` 的 `toolNames`/`toolCatalog`），阶段 B 处理 |
 
 P2 两项未修，需先确认语义再动：`take()` 改为引用计数会改变被动回复配额语义；`readAll()` 改为抛错会影响容错策略。
 
@@ -181,7 +205,8 @@ P2 两项未修，需先确认语义再动：`take()` 改为引用计数会改�
 - 禁用 `git reset --hard` / `git checkout .` / `git clean -fd` / `git stash`
 - 提交信息：`{feat,fix,docs,chore}(<scope>): <简述>`
 - 未经要求不提交
-- 新增 `/api/*` 路由不用手写认证：`handler` 入口统一过 `api-security.ts`。但**不要在 `json()` 里写 CORS 头**，`Access-Control-Allow-Origin` 由 `handler` 按 Origin 白名单回写。
+- 新增 `/api/*` 路由：在 `src/http/routes/` 建模块并注册到 `router.ts`，依赖从 `HttpContext` 取；**不要在 `json()` 里写 CORS 头**，`Access-Control-Allow-Origin` 由 `http/server.ts` 按 Origin 白名单回写。
+- `index.ts` 只做装配与启动；新增业务逻辑落到对应模块（状态 → `app-state.ts`，QQ → `qq/`，插话 → `proactive.ts`）。
 
 ---
 

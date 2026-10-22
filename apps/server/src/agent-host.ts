@@ -317,3 +317,6 @@ export function createAgentHost(deps: AgentHostDependencies) {
 		disposePeer,
 	};
 }
+
+/** `createAgentHost` 的返回类型，便于各模块在依赖注入时引用。 */
+export type AgentHost = ReturnType<typeof createAgentHost>;

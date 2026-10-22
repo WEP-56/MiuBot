@@ -1,42 +1,10 @@
 import type { McpRuntime } from "@miubot/plugin/tools/index";
-import type { createAgentHost, PeerConfig, RuntimeSession } from "../agent-host.ts";
+import type { AgentHost, PeerConfig, RuntimeSession } from "../agent-host.ts";
 import type { RuntimeLog } from "../logging.ts";
+import type { ProactiveDecision, ProactiveMetrics } from "../proactive.ts";
+import type { QqConnectionState, QrState } from "../qq/connection.ts";
 import type { AppConfig, QqBotConfig } from "../runtime.ts";
 import type { StickerStore } from "../stickers.ts";
-
-export type AgentHost = ReturnType<typeof createAgentHost>;
-
-export type QqConnectionState = {
-	phase: "disconnected" | "connecting" | "connected" | "error";
-	appId?: string;
-	error?: string;
-	nickname?: string;
-	avatarUrl?: string;
-};
-
-export type QrState = {
-	phase: "idle" | "waiting" | "connected" | "failed";
-	url?: string;
-	qrSvg?: string;
-	error?: string;
-};
-
-export type ProactiveMetrics = {
-	groupMessagesReceived: number;
-	candidates: number;
-	judgments: number;
-	planned: number;
-	sent: number;
-	blocked: number;
-};
-
-export type ProactiveDecision = {
-	time: string;
-	groupId: string;
-	sessionId?: string;
-	result: string;
-	reason: string;
-};
 
 /**
  * 管理 API 的依赖上下文。
