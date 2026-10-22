@@ -1,7 +1,7 @@
 import { isIP } from "node:net";
-import { MediaFileType, type QQBotInboundMessage, type ReplyTarget } from "@tencent-connect/qqbot-nodejs";
 import type { ImageContent } from "@miubot/provider";
 import { processImage } from "@miubot/shared/utils/image-process";
+import type { QQBotInboundMessage } from "@tencent-connect/qqbot-nodejs";
 
 const MAX_INBOUND_IMAGE_BYTES = 12 * 1024 * 1024;
 const MAX_INBOUND_IMAGES = 4;
@@ -14,13 +14,6 @@ export interface MediaAttachment {
 	mimeType: string;
 	fileName?: string;
 	transcript?: string;
-}
-
-export interface OutboundMedia {
-	kind: MediaKind;
-	buffer: Buffer;
-	fileName: string;
-	caption?: string;
 }
 
 export interface PreparedInboundMedia {
@@ -36,9 +29,20 @@ function mediaKind(mimeType: string): MediaKind {
 	return "file";
 }
 
-export async function downloadImage(url: string, fetcher: typeof fetch = fetch): Promise<{ bytes: Uint8Array; mimeType: string }> {
+export async function downloadImage(
+	url: string,
+	fetcher: typeof fetch = fetch,
+): Promise<{ bytes: Uint8Array; mimeType: string }> {
 	const parsed = new URL(url);
-	if (parsed.protocol !== "https:" || parsed.username || parsed.password || isIP(parsed.hostname) || parsed.hostname.endsWith(".localhost") || parsed.hostname.endsWith(".local") || !parsed.hostname.includes(".")) {
+	if (
+		parsed.protocol !== "https:" ||
+		parsed.username ||
+		parsed.password ||
+		isIP(parsed.hostname) ||
+		parsed.hostname.endsWith(".localhost") ||
+		parsed.hostname.endsWith(".local") ||
+		!parsed.hostname.includes(".")
+	) {
 		throw new Error("图片附件地址必须是公网 HTTPS URL");
 	}
 	const response = await fetcher(parsed, { signal: AbortSignal.timeout(15_000), redirect: "error" });
@@ -46,7 +50,8 @@ export async function downloadImage(url: string, fetcher: typeof fetch = fetch):
 	const mimeType = (response.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
 	if (!mimeType.startsWith("image/")) throw new Error("附件响应不是图片");
 	const declaredLength = Number(response.headers.get("content-length"));
-	if (Number.isFinite(declaredLength) && declaredLength > MAX_INBOUND_IMAGE_BYTES) throw new Error("图片超过 12 MB 限制");
+	if (Number.isFinite(declaredLength) && declaredLength > MAX_INBOUND_IMAGE_BYTES)
+		throw new Error("图片超过 12 MB 限制");
 	if (!response.body) throw new Error("图片响应没有内容");
 
 	const reader = response.body.getReader();
@@ -87,7 +92,8 @@ export async function prepareInboundMedia(
 	const notes: string[] = [];
 	const imageAttachments = attachments.filter((attachment) => attachment.kind === "image");
 	if (imageAttachments.length > 0 && !options.supportsVision) notes.push("收到图片，但当前会话模型不支持图片输入。");
-	if (imageAttachments.length > MAX_INBOUND_IMAGES) notes.push(`图片最多处理 ${MAX_INBOUND_IMAGES} 张，本条消息其余图片已略过。`);
+	if (imageAttachments.length > MAX_INBOUND_IMAGES)
+		notes.push(`图片最多处理 ${MAX_INBOUND_IMAGES} 张，本条消息其余图片已略过。`);
 
 	for (const attachment of imageAttachments.slice(0, MAX_INBOUND_IMAGES)) {
 		if (!options.supportsVision) break;
@@ -101,28 +107,20 @@ export async function prepareInboundMedia(
 			images.push({ type: "image", data: processed.data, mimeType: processed.mimeType });
 			if (processed.hints.length > 0) notes.push(...processed.hints);
 		} catch (error) {
-			notes.push(`${attachment.fileName ?? "图片"}读取失败：${error instanceof Error ? error.message : String(error)}`);
+			notes.push(
+				`${attachment.fileName ?? "图片"}读取失败：${error instanceof Error ? error.message : String(error)}`,
+			);
 		}
 	}
 
 	for (const attachment of attachments.filter((item) => item.kind !== "image")) {
 		const label = attachment.kind === "audio" ? "音频" : attachment.kind === "video" ? "视频" : "文件";
-		notes.push(attachment.transcript ? `收到${label}附件，语音识别文本：${attachment.transcript}` : `收到${label}附件：${attachment.fileName ?? attachment.mimeType}（目前仅传递附件信息）`);
+		notes.push(
+			attachment.transcript
+				? `收到${label}附件，语音识别文本：${attachment.transcript}`
+				: `收到${label}附件：${attachment.fileName ?? attachment.mimeType}（目前仅传递附件信息）`,
+		);
 	}
 
 	return { attachments, images, context: notes.join("\n") };
-}
-
-export async function sendQQMedia(
-	bot: { sendMedia(options: { target: ReplyTarget; fileType: MediaFileType; buffer: Buffer; fileName: string; content?: string }): Promise<unknown> },
-	target: ReplyTarget,
-	media: OutboundMedia,
-): Promise<void> {
-	const fileType = {
-		image: MediaFileType.IMAGE,
-		audio: MediaFileType.VOICE,
-		video: MediaFileType.VIDEO,
-		file: MediaFileType.FILE,
-	}[media.kind];
-	await bot.sendMedia({ target, fileType, buffer: media.buffer, fileName: media.fileName, ...(media.caption ? { content: media.caption } : {}) });
 }

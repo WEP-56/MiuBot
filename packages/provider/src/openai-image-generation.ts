@@ -23,7 +23,9 @@ function explicitOption<T extends string>(value: T | undefined): T | undefined {
 // Servers claiming the OpenAI images protocol differ in which optional fields they accept, and the
 // rejection message is often generic ("invalid image generation request"). Treat those rejections as a
 // compatibility signal and retry with progressively fewer optional fields before failing.
-function generationAttempts(options: OpenAIImageGenerationOptions): Array<{ size?: ImageSize; quality?: ImageQuality }> {
+function generationAttempts(
+	options: OpenAIImageGenerationOptions,
+): Array<{ size?: ImageSize; quality?: ImageQuality }> {
 	const size = explicitOption(options.size);
 	const quality = explicitOption(options.quality);
 	const attempts: Array<{ size?: ImageSize; quality?: ImageQuality }> = [];
@@ -47,7 +49,10 @@ function errorMessage(payload: unknown): string | undefined {
 }
 
 function parseGeneratedImage(payload: unknown): GeneratedImage {
-	const first = typeof payload === "object" && payload !== null && "data" in payload && Array.isArray(payload.data) ? payload.data[0] as { b64_json?: unknown; url?: unknown } | undefined : undefined;
+	const first =
+		typeof payload === "object" && payload !== null && "data" in payload && Array.isArray(payload.data)
+			? (payload.data[0] as { b64_json?: unknown; url?: unknown } | undefined)
+			: undefined;
 	if (typeof first?.b64_json === "string" && first.b64_json) return { data: first.b64_json, mimeType: "image/png" };
 	if (typeof first?.url === "string" && first.url) return { url: first.url };
 	throw new Error("图像接口未返回 b64_json 或 url 图片数据");

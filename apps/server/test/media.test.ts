@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
-import { MediaFileType } from "@tencent-connect/qqbot-nodejs";
-import { prepareInboundMedia, sendQQMedia, type OutboundMedia } from "../src/media.ts";
+import { prepareInboundMedia } from "../src/media.ts";
 
 describe("QQ media adapter", () => {
 	it("prepares image attachments for vision models and retains generic attachment context", async () => {
@@ -30,22 +29,5 @@ describe("QQ media adapter", () => {
 		expect(fetcher).not.toHaveBeenCalled();
 		expect(result.images).toEqual([]);
 		expect(result.context).toContain("不支持图片输入");
-	});
-
-	it("routes all supported outbound attachment kinds through QQ media upload", async () => {
-		const sendMedia = vi.fn().mockResolvedValue(undefined);
-		const target = { scope: "c2c" as const, targetId: "peer" };
-		const kinds: Array<[OutboundMedia["kind"], MediaFileType]> = [
-			["image", MediaFileType.IMAGE],
-			["audio", MediaFileType.VOICE],
-			["video", MediaFileType.VIDEO],
-			["file", MediaFileType.FILE],
-		];
-
-		for (const [kind, fileType] of kinds) {
-			const media: OutboundMedia = { kind, buffer: Buffer.from("media"), fileName: `${kind}.bin`, caption: "caption" };
-			await sendQQMedia({ sendMedia }, target, media);
-			expect(sendMedia).toHaveBeenLastCalledWith({ target, fileType, buffer: media.buffer, fileName: media.fileName, content: "caption" });
-		}
 	});
 });

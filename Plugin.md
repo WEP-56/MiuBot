@@ -1,7 +1,7 @@
 # Miubot Plugin Core：插件系统设计与开发草案
 
-> **状态：设计草案 / 用于后续真实开发**  
-> **建议入库位置：** `docs/07-高级配置/Plugin.md`  
+> **状态：设计草案；平台层底座已落地（2026-10-22），Plugin Host 未开始**  
+> **建议入库位置：** `docs/07-高级配置/Plugin.md`（需与旧文档 `07-扩展插件与自动化规则.md` 合并，避免同主题两套文档并存）  
 > **依据：** 2026-10-21 查阅的 [WEP-56/MiuBot](https://github.com/WEP-56/MiuBot) 公开 `main` 分支，以及当前产品讨论；本地未推送的实现可能更新。  
 > **相关文档：** [旧版扩展插件与自动化规则](07-扩展插件与自动化规则.md)、`../../AGENTS.md`、`../10-技术架构/04-Pi移植记录.md`
 
@@ -70,6 +70,12 @@
 具体参考：[extensions/loader.ts](https://github.com/WEP-56/MiuBot/blob/main/packages/plugin/src/extensions/loader.ts)、[tools/index.ts](https://github.com/WEP-56/MiuBot/blob/main/packages/plugin/src/tools/index.ts)、[agent-host.ts](https://github.com/WEP-56/MiuBot/blob/main/apps/server/src/agent-host.ts)、[resource-loader.ts](https://github.com/WEP-56/MiuBot/blob/main/packages/session/src/resource-loader.ts)。
 
 **注意：** `apps/server` 当前直接列出有效 Tool 名称，并在已存在的 Agent Session 上调用 `setActiveToolsByName(...)`。Plugin 接入后需要替换“静态列表直接拼接”的部分，但**必须保留对象级开关和执行时权限校验**；不能只改显示列表就当完成授权。
+
+**已定位的重复清单（接入时必须合并）：** 有效 Tool 名称目前存在两份：
+- `apps/server/src/agent-host.ts` 的 `nativeToolNames`（运行时授权过滤）
+- `apps/server/src/index.ts` 的 `toolNames` / `toolCatalog`（管理 API 与前端开关）
+
+Plugin Tool 注册后这两份必须改为同一 Registry 驱动，否则会出现「前端已启用、运行时却不可见」或反向不一致。内置 Tool 不强制迁移成插件包，但清单本身要单一来源。
 
 ## 4. Plugin Host 与 Session Runtime 结构
 
@@ -176,23 +182,92 @@ Host 在 `setup()` 阶段登记 Tool / Handler，注册必须支持撤销；将�
 
 ### 6.1 事件来源和粒度
 
-首版仅接入**实际存在且能稳定提供的 QQ 官方事件**，再逐渐完善 OneBot / NapCat。建议分类：
+> **[现有] 已落地（2026-10-22）** — 平台层位于 `apps/server/src/platform/`：
+> - `events.ts`：`NormalizedPlatformEvent`、`createPlatformEventBus`、各 `normalize*` 函数
+> - `inbound.ts`：`normalizeInboundMessage`（引用链 / 消息段 / 附件 / @ 列表）、`createMessageDeduplicator`
+> - `outbound.ts`：`createOutboundChannel`（分片 / 被动配额降级 / Markdown / 媒体 / C2C 流式）
+>
+> 接入点：`apps/server/src/index.ts` 的 `connectQQ()` 注册 `message` / `rawEvent` / `interaction` / `resumed` / `disconnected`，派发到服务级总线。
+> 测试：`apps/server/test/platform-{events,inbound,outbound}.test.ts`。
 
-- `message.received`：标准化的入站消息；可以用于统计、关键词功能和游戏指令处理。
-- `platform.group.member_joined`：平台支持时才派发；不能假设所有 QQ 机器人协议都有对应事件。
-- `message.sent`：发送成功后的观察事件；不等同于入站事件。
-- `platform.raw`：可选高级事件；默认只允许可信插件订阅，并明确协议字段不稳定。
+事件来源分两类：
 
-标准化事件至少包含：`eventId`、`type`、`platform`、`botId`、`timestamp`、`scope`（如 group/c2c）、`peerId`、`senderId?`、`payload`。原始平台字段保持在隔离的 `raw` 中，开发者应优先消费标准字段。
+1. **具名事件**：SDK 已解析的 `message` / `interaction` / `ready` / `resumed` / `disconnected`。
+2. **透传事件**：其余全部 QQ Gateway 事件从 `rawEvent` 取得（SDK 对未识别事件返回 `action: "raw"`）。
 
-**事件语义要先明确**：何时触发（消息过滤前 / 后）、是否允许消费或修改、异常是否阻断主消息流水线。推荐 P0 先实现**只读观察事件与独立动作**；不要让任意插件都能隐式修改 QQ 消息和 Agent Prompt。
+已归一化的标准事件：
+
+| 标准事件 | 来源 / 说明 |
+| --- | --- |
+| `message.received` | 入站消息（C2C / 群）；插件可只监听消息而不接 Agent |
+| `message.sent` | 发送成功观察事件；含分片数与「已降级主动推送」标记 |
+| `platform.interaction` | 按钮点击；`payload.buttonId` / `buttonData` 由插件约定 |
+| `platform.group.bot_added` | `GROUP_ADD_ROBOT`：Bot 被拉入群 |
+| `platform.group.bot_removed` | `GROUP_DEL_ROBOT` |
+| `platform.group.message_rejected` / `message_allowed` | `GROUP_MSG_REJECT` / `GROUP_MSG_RECEIVE` |
+| `platform.c2c.message_rejected` / `message_allowed` | `C2C_MSG_REJECT` / `C2C_MSG_RECEIVE` |
+| `platform.friend.added` / `removed` | `FRIEND_ADD` / `FRIEND_DEL` |
+| `platform.guild.member_added` / `member_removed` | `GUILD_MEMBER_ADD` / `GUILD_MEMBER_REMOVE` |
+| `platform.reaction.added` / `removed` | `MESSAGE_REACTION_ADD` / `MESSAGE_REACTION_REMOVE` |
+| `platform.connection.ready` / `resumed` / `lost` | 连接生命周期 |
+| `platform.raw` | 未列出的未知事件，保证不丢事件 |
+
+结构：`eventId`、`type`、`platform`、`botId`、`timestamp`、`scope?`、`peerId?`、`senderId?`、`payload`、`raw?`。原始平台字段只放在 `raw`。
+
+**重要修正（纠正早期设想）：** QQ 官方 API **没有「群成员加入」事件**，只有 `GROUP_ADD_ROBOT`（Bot 被拉进群）。因此：
+
+- “入群欢迎”在 QQ 官方协议下应实现为 **Bot 入群时发欢迎语**（`platform.group.bot_added`），不是欢迎新成员。
+- `platform.group.member_joined` 只是**多平台目标**，QQ 官方适配器不会派发；首版验收**不得**依赖它。
+
+**事件语义：** 当前为**只读观察 + 独立动作**。插件不能修改入站消息、不能阻断主消息流水线，也不能隐式篡改 Agent Prompt。写操作需按 `eventId` 幂等。
 
 ### 6.2 分发与错误隔离
 
-- 一个插件抛异常，记录带 `pluginId/eventId` 的错误；默认**不得阻断其他插件或正常 QQ 消息流程**。
-- 明确每个 Handler 的超时、并发上限、积压队列及丢弃策略，防止繁忙群聊或慢插件拖垮主消息循环。
-- 一个事件可能重复到达；游戏奖励、支付、签到等写操作需按 `eventId` 幂等处理。
+**[现有]** `createPlatformEventBus` 已实现以下语义，Plugin Host 直接复用：
+
+- 每个订阅者独立 `try/catch`，单个抛错不影响其它订阅者，也不阻断主消息流水线。
+- 每个订阅者有超时上限（默认 5s），超时只记录错误并继续，不会挂住主循环。
+- 订阅返回撤销函数，停用插件时必须调用以释放监听。
+- 事件总线**没有**入站队列与背压；插件若做重活必须自行排队，或在后续阶段补 P1 队列。
+
+待补：
+
+- 一个事件可能重复到达；写操作需按 `eventId` 幂等。入站消息已用 `createMessageDeduplicator` 去重，插件侧写操作仍需自行保证。
 - 不将 Event Handler 等同于模型 Tool 执行。它可以不用 LLM；若调用 LLM，也应通过宿主服务接口并接受成本与权限限制。
+
+### 6.3 入站消息（[现有]）
+
+`normalizeInboundMessage` 已消费 SDK 提供的完整字段，插件应基于标准结构而非原始协议：
+
+| 字段 | 说明 |
+| --- | --- |
+| `messageId` | 平台消息 ID；已用于去重，也是幂等键 |
+| `text` / `rawText` | 去掉 `@bot` 标记的正文 / 原始正文 |
+| `mentionedBot` | 是否 @ 了 Bot（含 `GROUP_AT_MESSAGE_CREATE` 与 `<@appid>` 两种形式） |
+| `mentions` | **全部**被 @ 的成员（不只是 Bot） |
+| `segments` | 文本 / @ / 图片 / 音频 / 视频 / 文件的结构化列表 |
+| `attachments` | 附件含 `wavUrl`（语音原始 WAV）与 `transcript`（ASR 文本） |
+| `quote` | 引用消息：`refMsgIdx` + `text` + `attachments`，来源固定为 `msg_elements` |
+| `messageScene` / `msgType` / `msgIdx` | 平台场景与消息类型 |
+| `raw` | 原始平台消息，仅诊断用 |
+
+关键行为：**引用链已接通**。此前 `refMsgIdx`/`msgElements` 被丢弃，导致「引用 Bot 那句继续问」无法理解；现在引用原文会作为上下文注入 Prompt。
+
+### 6.4 出站通道（[现有]，插件必须复用）
+
+`createOutboundChannel` 是**唯一允许的消息出口**。插件不得直接调用 `bot.sendText` / `sendMedia`，否则会绕过以下保护：
+
+| 能力 | 说明 |
+| --- | --- |
+| 文本分片 | 按 5000 字符上界切分，优先在换行处断开，保持代码块与 GFM 表格完整 |
+| 被动回复配额 | 同一 `msgId` 被动回复有上限（默认 4 次）；耗尽后**自动降级**为主动推送（去掉 `msgId`） |
+| 禁止降级 | `allowProactiveFallback: false` 时配额耗尽直接报错，供必须被动响应的场景使用 |
+| Markdown | 单条消息可走 `sendMarkdown`（`msg_type=2`） |
+| 媒体 | 图片 / 语音 / 视频 / 文件统一走富媒体上传 |
+| C2C 流式 | `openStream()` 仅在私聊且存在 `msgId` 时可用；群聊返回 `supported: false` |
+| 发送观察 | `onSent` 回调驱动 `message.sent` 事件，用于审计与统计 |
+
+**已知缺口：** `message.sent` 的 `botId` 在无法反查时退化为 `default`；单 Bot 场景无影响，多 Bot 场景需在 Plugin Host 接入时补严格映射。
 
 ## 7. Agent Tool 桥接（P0）
 
@@ -216,6 +291,13 @@ Host 在 `setup()` 阶段登记 Tool / Handler，注册必须支持撤销；将�
 4. 插件停用后立即拒绝新 Tool 调用，撤销 Registry 注册；既有 Session 可按现有 `rebuildAgentSessions()` 或增量更新策略重新同步，先保证正确性。
 5. 对停用时正在运行的 Tool 定义取消 / 等待策略；优先取消可取消任务、有限时间等待清理，不能假设撤销注册会终止已执行的请求。
 6. **Tool 的入口属于 `plugin`，底层业务服务按领域归属。** 例如表情包文件存储、图片任务服务，不因 Tool 调用而必须搬进 Plugin Host。
+
+**已定位的执行时校验接入点（避免实现时选错层次）：** `packages/session/src/agent-session.ts` 的 `_beforeToolCall`（约 657 行）当前**只**把事件转发给 `ExtensionRunner` 的 `tool_call` handler，没有任何"宿主策略"入口。Plugin Tool 权限校验有两条可选路径，语义不同，需先决定：
+
+1. **内部扩展**：Plugin Host 注册一个内置 Extension，用 `tool_call` handler 做校验并 `block`。优点是不改 `session`；缺点是校验与插件自身扩展共用同一机制。
+2. **新增 session 级策略回调**：在 `createAgentSession` 增加 `beforeToolCall` 策略注入点。优点语义清晰、可测；缺点是要改 `packages/session` 公开接口。
+
+推荐方案 2（最小契约 + 明确归属），但必须先确认不会扩大 `session ↔ plugin` 已有的双向类型依赖。
 
 ## 8. Config UI 与 Plugin Storage（P0）
 
@@ -389,13 +471,25 @@ Agent 主动发言是 Agent 行为策略，插件定时任务是通用调度机�
 
 ## 14. 实际开发顺序
 
+### 阶段 0：平台层底座（[现有]，2026-10-22 已完成）
+
+插件依赖事件、入站与出站能力，因此先行补齐，且这部分本身修复了独立缺陷：
+
+- [x] 事件归一化 + 服务级事件总线（`platform/events.ts`），覆盖全部 QQ 官方事件，未知事件不丢弃。
+- [x] 监听 `rawEvent` / `interaction` / `resumed` / `disconnected`（此前完全未监听）。
+- [x] 入站归一化（`platform/inbound.ts`）：引用链、消息段、全部 @ 成员、语音 WAV、`messageId` 去重。
+- [x] 统一出站通道（`platform/outbound.ts`）：文本分片、被动配额与主动推送降级、Markdown、媒体、C2C 流式。
+- [x] 移除重复路径：删除 `media.ts` 的 `sendQQMedia`，媒体统一走 `channel.sendMedia`。
+- [x] 34 项平台单测；真实启动连上 QQ Gateway 验证通过。
+
 ### 阶段 A：最小服务级 Plugin Host（P0）
 
 - [ ] 确定 Manifest 格式、API 版本与 Schema 校验。
+- [x] ~~提供最小 Event Dispatcher~~（已在阶段 0 完成：`createPlatformEventBus`）。
 - [ ] 创建服务级 `PluginHost`：发现、本地加载、启动、停止、dispose、状态与日志。
-- [ ] 提供最小 Event Dispatcher（从已有 QQ 消息流注入标准化事件）。
 - [ ] 实现 Config 读写 / 校验与独立 Storage 命名空间。
-- [ ] 编写一个**纯事件插件**（入群欢迎或关键词回复），证明无 Agent Session 也能工作。
+- [ ] 编写一个**纯事件插件**（Bot 入群欢迎或关键词回复），证明无 Agent Session 也能工作。
+- [ ] 建立"插件 → 出站通道"的受控注入；插件**不得**直接持有 `QQBot`。
 
 ### 阶段 B：接入现有 Agent 能力（P0）
 
@@ -421,7 +515,7 @@ Agent 主动发言是 Agent 行为策略，插件定时任务是通用调度机�
 
 ## 15. 最小验收用例
 
-1. **不依赖 Agent：** 服务启动且没有聊天 Session 时，入群欢迎插件收到受支持平台事件并执行一次。
+1. **不依赖 Agent：** 服务启动且没有聊天 Session 时，欢迎插件收到 `platform.group.bot_added` 并执行一次（**注意**：QQ 官方无「成员入群」事件，不能用 `member_joined` 做验收）。
 2. **不重复触发：** 创建 10 个 Agent Session，同一平台事件的插件监听仍只注册一次。
 3. **Tool 共存：** 插件 Tool 与原有 `web_search` / `load_skill` / MCP Tool 共存，不改变内置注册来源。
 4. **权限拒绝：** 禁用某群生图 Tool 后，既不能在模型工具集看到，也不能通过既有 Session 的直接执行路径绕过权限。

@@ -8,14 +8,22 @@ describe("image_gen tool", () => {
 		const context = {} as Parameters<typeof tool.execute>[4];
 		const signal = new AbortController().signal;
 
-		const result = await tool.execute("call-1", { prompt: "A blue cat", size: "1024x1024", quality: "high" }, signal, undefined, context);
+		const result = await tool.execute(
+			"call-1",
+			{ prompt: "A blue cat", size: "1024x1024", quality: "high" },
+			signal,
+			undefined,
+			context,
+		);
 
 		expect(generate).toHaveBeenCalledWith({ prompt: "A blue cat", size: "1024x1024", quality: "high", signal });
 		expect(result.isError).not.toBe(true);
 	});
 
 	it("returns generation failures as tool errors", async () => {
-		const tool = createImageGenTool(async () => { throw new Error("provider unavailable"); });
+		const tool = createImageGenTool(async () => {
+			throw new Error("provider unavailable");
+		});
 		const context = {} as Parameters<typeof tool.execute>[4];
 
 		const result = await tool.execute("call-2", { prompt: "A blue cat" }, undefined, undefined, context);
