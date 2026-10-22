@@ -1,8 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { McpServerConfig } from "@miubot/plugin/tools/index";
 import type { WebSearchProvider } from "../../runtime.ts";
+import { toolNames } from "../../tool-names.ts";
 import type { HttpContext } from "../context.ts";
-import { toolCatalog, toolNames } from "../present.ts";
+import { toolCatalog } from "../present.ts";
 import { body, json } from "../response.ts";
 
 /** `/api/tools` 与 `/api/mcp`：Tool 开关、搜索凭据、MCP 服务器配置。 */

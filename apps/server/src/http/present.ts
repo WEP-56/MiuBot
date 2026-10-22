@@ -29,10 +29,6 @@ export function publicSession(
 	return { ...item, messageCount: messages.length, summaryConfigured: Boolean(summary) };
 }
 
-export const nativeToolNames = ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"] as const;
-
-export const toolNames = [...nativeToolNames, "web_search", "image_gen"];
-
 export type ToolCatalogEntry = {
 	name: string;
 	label: string;

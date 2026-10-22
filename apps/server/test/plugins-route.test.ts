@@ -28,6 +28,7 @@ async function harness(): Promise<{
 	pluginsDir: string;
 	config: AppConfig;
 	saved: () => number;
+	rebuilds: () => number;
 	host: PluginHost;
 	call: (method: string, path: string) => Promise<Call>;
 }> {
@@ -45,6 +46,7 @@ async function harness(): Promise<{
 	});
 
 	const config = createDefaultConfig();
+	const rebuildAgentSessions = vi.fn();
 	let saveCount = 0;
 	const ctx = {
 		config: {
@@ -54,6 +56,8 @@ async function harness(): Promise<{
 				saveCount += 1;
 			},
 		},
+		// 启停会重建会话以同步工具集；这里只验证「有没有被调用」，不需要真会话。
+		agentHost: { rebuildAgentSessions },
 		plugins: {
 			list: host.list,
 			get: host.get,
@@ -71,6 +75,7 @@ async function harness(): Promise<{
 		pluginsDir,
 		config,
 		saved: () => saveCount,
+		rebuilds: () => rebuildAgentSessions.mock.calls.length,
 		call: async (method, path) => {
 			const url = new URL(path, "http://127.0.0.1");
 			const req = { method, url: path, headers: {} } as IncomingMessage;
@@ -100,8 +105,13 @@ export default {
 };
 `;
 
-/** 写一个可运行的插件目录；`id` 同时作为目录名。 */
-async function writePlugin(pluginsDir: string, id: string, extra: Record<string, unknown> = {}): Promise<void> {
+/** 写一个可运行的插件目录；`id` 同时作为目录名。`setup` 可替换成注册工具等自定义实现。 */
+async function writePlugin(
+	pluginsDir: string,
+	id: string,
+	extra: Record<string, unknown> = {},
+	setup?: string,
+): Promise<void> {
 	const directory = join(pluginsDir, id);
 	await mkdir(directory, { recursive: true });
 	await writeFile(
@@ -118,7 +128,10 @@ async function writePlugin(pluginsDir: string, id: string, extra: Record<string,
 		"utf8",
 	);
 	// 入口里把 id 写死成具体值：加载器会校验导出 id 与 manifest 是否一致。
-	await writeFile(join(directory, "index.ts"), pluginSource.replace("globalThis.__pluginId", JSON.stringify(id)), "utf8");
+	const source = setup
+		? `export default { id: ${JSON.stringify(id)}, setup(ctx) { ${setup} } };`
+		: pluginSource.replace("globalThis.__pluginId", JSON.stringify(id));
+	await writeFile(join(directory, "index.ts"), source, "utf8");
 }
 
 type PluginRow = {
@@ -126,6 +139,7 @@ type PluginRow = {
 	state: string;
 	enabled: boolean;
 	source: string;
+	tools: string[];
 	error?: string;
 };
 
@@ -159,6 +173,22 @@ describe("GET /api/plugins", () => {
 		expect(row(response, "invalid:broken")).toMatchObject({ source: "invalid", enabled: false });
 	});
 
+	it("列出插件注册的 Agent 工具名", async () => {
+		const h = await harness();
+		await writePlugin(h.pluginsDir, "demo.tools", { permissions: ["tool:register"] }, `
+			ctx.tools.register({
+				name: "demo_ping",
+				description: "示例工具",
+				async execute() { return "pong"; },
+			});
+		`);
+		await h.host.discover();
+		await h.host.start("demo.tools");
+
+		const response = await h.call("GET", "/api/plugins");
+		expect(row(response, "demo.tools")?.tools).toEqual(["demo_ping"]);
+	});
+
 	it("重复扫描不会把已有插件标成重复", async () => {
 		const h = await harness();
 		await writePlugin(h.pluginsDir, "demo.one");
@@ -184,6 +214,8 @@ describe("POST /api/plugins/:id/disable", () => {
 		expect(h.config.plugins.disabled).toEqual(["demo.one"]);
 		expect(h.saved()).toBe(1);
 		expect(h.host.get("demo.one")?.state).toBe("inactive");
+		// 已有会话里的工具集必须跟着变，否则要等会话自然过期才生效。
+		expect(h.rebuilds()).toBeGreaterThan(0);
 	});
 });
 

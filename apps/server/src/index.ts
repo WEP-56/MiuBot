@@ -18,6 +18,7 @@ import { createInboundHandler } from "./qq/inbound.ts";
 import { sessionPromptContexts, stickerSendContexts } from "./session-context.ts";
 import { createStickerTagging } from "./sticker-tagging.ts";
 import { StickerStore } from "./stickers.ts";
+import { auxiliaryToolNames, toolNames } from "./tool-names.ts";
 
 /**
  * 进程入口与组合根。
@@ -53,25 +54,12 @@ const log = logger.write;
 const state = createAppState({ dataDir });
 const stickerStore = new StickerStore(dataDir);
 const mcpRuntime = new McpRuntime();
-const agentHost = createAgentHost({
-	dataDir,
-	agentDir,
-	getConfig: state.getConfig,
-	getPeerConfig: state.getPeerConfig,
-	getPromptContext: (sessionId) => sessionPromptContexts.get(sessionId),
-	getStickerContext: (sessionId) => stickerSendContexts.get(sessionId),
-	getSessions: state.getSessions,
-	stickerStore,
-	mcpRuntime,
-});
-const stickerTagging = createStickerTagging({
-	getConfig: state.getConfig,
-	stickerStore,
-	agentHost,
-	log,
-});
 
-/** 连接对象在入站处理器之后创建，先留声明供平台与插件桥惰性取值。 */
+/**
+ * 装配顺序有依赖：插件宿主先建（Agent 会话要从中取插件工具），
+ * 平台对象又要早于插件宿主（事件总线是插件的订阅源），因此平台排在中间。
+ * `connection` 仍需留声明：平台与插件桥的回调只在运行时才用到它。
+ */
 let connection: QqConnection;
 const platform = createQqPlatform({
 	onEventError: (error, type, eventType) =>
@@ -104,6 +92,32 @@ const pluginHost: PluginHost = createPluginHost({
 	),
 	storageFor: (pluginId) => createFileStorage({ root: pluginStorageDir, pluginId }),
 	logger: createPluginLogger((level, text) => log(level, text)),
+	// 插件工具不能覆盖内置 / MCP 工具：同名会让模型「以为在调内置工具、实际跑了插件代码」。
+	reservedToolNames: () => [
+		...toolNames,
+		...auxiliaryToolNames,
+		...mcpRuntime.getEnabledToolDefinitions().map((tool) => tool.name),
+	],
+});
+
+const agentHost = createAgentHost({
+	dataDir,
+	agentDir,
+	getConfig: state.getConfig,
+	getPeerConfig: state.getPeerConfig,
+	getPromptContext: (sessionId) => sessionPromptContexts.get(sessionId),
+	getStickerContext: (sessionId) => stickerSendContexts.get(sessionId),
+	getSessions: state.getSessions,
+	stickerStore,
+	mcpRuntime,
+	// 按会话所属 Bot 过滤：manifest 里声明只服务某个 Bot 的插件，不能把工具暴露给别的 Bot。
+	pluginTools: pluginHost.tools,
+});
+const stickerTagging = createStickerTagging({
+	getConfig: state.getConfig,
+	stickerStore,
+	agentHost,
+	log,
 });
 
 const proactive = createProactive({

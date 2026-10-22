@@ -87,6 +87,13 @@ export async function handlePluginRoutes(
 		await ctx.plugins.reload(id);
 	}
 
+	/**
+	 * 插件启停会改变它注册的工具集合，而工具是在会话创建时注入的。
+	 * 这里直接重建会话：插件启停是低频管理动作，正确性比省一次重建重要。
+	 * （与 MCP 配置变更走同一条路径：`routes/tools.ts` 也是重建。）
+	 */
+	ctx.agentHost.rebuildAgentSessions();
+
 	json(res, 200, { ok: true, ...snapshot(ctx) });
 	return true;
 }

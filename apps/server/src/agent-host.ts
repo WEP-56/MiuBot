@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import type { ToolDefinition } from "@miubot/plugin/extensions/types";
 import { createBuiltinTools, type McpRuntime } from "@miubot/plugin/tools/index";
 import { generateOpenAIImage } from "@miubot/provider";
 import type { AgentSession } from "@miubot/session/agent-session";
@@ -11,6 +12,7 @@ import { downloadImage } from "./media.ts";
 import type { OutboundChannel } from "./platform/outbound.ts";
 import type { AppConfig, ModelConfig, ProviderConfig } from "./runtime.ts";
 import { extensionForMime, type Sticker, type StickerStore } from "./stickers.ts";
+import { toolNames } from "./tool-names.ts";
 
 export type RuntimeMessage = { role: "user" | "assistant"; content: string; sender?: string; timestamp: string };
 export type RuntimeSession = {
@@ -44,6 +46,12 @@ export type PeerConfig = {
 	features: { activeReply: boolean };
 };
 
+/** 插件注册的 Agent Tool；由 PluginHost 提供，按会话所属 Bot 过滤。 */
+type PluginToolScope = {
+	definitionsFor(scope: { botId: string }): ToolDefinition[];
+	namesFor(scope: { botId: string }): string[];
+};
+
 type AgentHostDependencies = {
 	dataDir: string;
 	agentDir: string;
@@ -56,6 +64,7 @@ type AgentHostDependencies = {
 	getSessions: () => RuntimeSession[];
 	stickerStore: StickerStore;
 	mcpRuntime: McpRuntime;
+	pluginTools: PluginToolScope;
 };
 
 export function createAgentHost(deps: AgentHostDependencies) {
@@ -110,25 +119,16 @@ export function createAgentHost(deps: AgentHostDependencies) {
 
 	function enabledToolNames(runtimeSession: RuntimeSession): string[] {
 		const current = config();
-		const nativeToolNames = [
-			"read",
-			"bash",
-			"powershell",
-			"edit",
-			"write",
-			"grep",
-			"find",
-			"ls",
-			"web_search",
-			"image_gen",
-		];
 		const peer = deps.getPeerConfig(runtimeSession.scope, runtimeSession.peerId, runtimeSession.botId);
 		if (peer?.useTools === false) return [];
 		return [
-			...current.tools.enabled.filter((name) => nativeToolNames.includes(name)),
+			// 只认 `/api/tools` 白名单里的名字：配置里残留的其它值一律忽略。
+			...current.tools.enabled.filter((name) => toolNames.includes(name)),
 			...(current.tools.skillsEnabled ? ["load_skill"] : []),
 			...(current.tools.stickersEnabled ? ["search_stickers", "send_sticker"] : []),
 			...deps.mcpRuntime.getEnabledToolDefinitions().map((tool) => tool.name),
+			// 插件工具跟着插件的启停走：管理员启用插件即视为放行，不再单列开关。
+			...deps.pluginTools.namesFor({ botId: runtimeSession.botId }),
 		];
 	}
 
@@ -163,7 +163,7 @@ export function createAgentHost(deps: AgentHostDependencies) {
 			existing.setActiveToolsByName(enabledToolNames(runtimeSession));
 			return existing;
 		}
-		const customTools = createBuiltinTools({
+		const customTools: ToolDefinition[] = createBuiltinTools({
 			webSearch: () => config().tools.webSearch,
 			...(current.tools.skillsEnabled ? { skills: { cwd: deps.dataDir, agentDir: deps.agentDir } } : {}),
 			...(current.tools.stickersEnabled
@@ -227,6 +227,14 @@ export function createAgentHost(deps: AgentHostDependencies) {
 			},
 			mcp: deps.mcpRuntime,
 		});
+		// 会话级注入：插件工具与内置工具走同一条 `customTools` 通道，由 session 统一包装。
+		// 每次创建会话都重新取——插件在那之后启停会触发 `rebuildAgentSessions()`。
+		// 同名校验已经在注册表里做过；这里再挡一次，是因为会话实际内置的工具集合
+		// 可能随时间变化（新增内置工具、加载了带工具的扩展），而注册期只看得到当时那份名单。
+		const taken = new Set(customTools.map((tool) => tool.name));
+		customTools.push(
+			...deps.pluginTools.definitionsFor({ botId: runtimeSession.botId }).filter((tool) => !taken.has(tool.name)),
+		);
 		const resourceLoader = new DefaultResourceLoader({
 			cwd: deps.dataDir,
 			agentDir: deps.agentDir,

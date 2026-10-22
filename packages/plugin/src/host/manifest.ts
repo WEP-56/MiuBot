@@ -14,12 +14,15 @@ export type PluginPermission =
 	| `event:${PlatformEventType}`
 	| "event:*"
 	| "storage:read"
-	| "storage:write";
+	| "storage:write"
+	/** 允许注册 Agent Tool（`ctx.tools.register()`）。 */
+	| "tool:register";
 
 const KNOWN_PERMISSIONS = new Set<string>([
 	"message:send",
 	"storage:read",
 	"storage:write",
+	"tool:register",
 	"event:*",
 	"event:message.received",
 	"event:message.sent",

@@ -14,6 +14,8 @@ type Plugin = {
   error?: string;
   permissions: string[];
   disposers: number;
+  /** 该插件向 Agent 注册的工具名；停用后为空。 */
+  tools: string[];
   source: "plugin" | "invalid" | "duplicate";
 };
 
@@ -172,6 +174,17 @@ export function Plugins() {
               )}
 
               <div className="flex flex-wrap items-center gap-1.5">
+                {plugin.tools?.length > 0 && (
+                  <span className="text-[11.5px] text-[#888888]">Agent 工具</span>
+                )}
+                {(plugin.tools ?? []).map((tool) => (
+                  <span
+                    key={tool}
+                    className="rounded-md border border-[rgba(34,197,94,0.25)] bg-[rgba(34,197,94,0.08)] px-1.5 py-0.5 font-mono text-[11px] text-[#22c55e]"
+                  >
+                    {tool}
+                  </span>
+                ))}
                 {plugin.permissions.length === 0 && (
                   <span className="text-[11.5px] text-[#666666]">未声明能力</span>
                 )}

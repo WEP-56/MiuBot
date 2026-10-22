@@ -1,21 +1,22 @@
-# 交接文档：Plugin 模块（阶段 A / C 已完成，阶段 B 待做）
+# 交接文档：Plugin 模块（阶段 A / B / C 均已完成）
 
 > 用途：因会话上下文过长，在新会话继续开发时先读这份。
-> 最后更新：2026-10-22 21:55
+> 最后更新：2026-10-22 22:20
 
 ---
 
 ## 一、当前状态
 
-**阶段 A（事件型插件）已完成并推送。阶段 C（插件管理 API + 工作台插件页）已完成。管理面安全与 `index.ts` 职责拆分已完成（2160 → 约 215 行）。下一步是阶段 B（插件注册 Agent Tool）。**
+**阶段 A（事件型插件）、阶段 B（插件注册 Agent Tool）、阶段 C（管理 API + 工作台插件页）均已完成并推送。** 管理面安全与 `index.ts` 职责拆分也已就绪（2160 → 约 215 行）。
 
-验证门禁全绿：`npm run check` / `npm run lint` / `npm test`（**185 files / 1750 tests**）。
+验证门禁全绿：`npm run check` / `npm run lint` / `npm test`（**187 files / 1763 tests**）。
 
-最近六次提交：
+最近七次提交：
 
 | commit | 内容 |
 |---|---|
-| 本次 | feat: 插件管理 API 与工作台插件页（阶段 C） |
+| 本次 | feat: 插件注册 Agent Tool 与会话注入（阶段 B） |
+| `d41ce5d` | feat: 插件管理 API 与工作台插件页（阶段 C） |
 | `86dc6af` | refactor(server): 拆分运行时状态、QQ 流水线与前置逻辑 |
 | `705c9d8` | refactor(server): 管理 API 路由从 index.ts 拆出 |
 | `8ae1731` | feat(server): 管理 API 本机认证与 Origin 收敛 |
@@ -162,12 +163,26 @@
 
 列表展示名称/版本/状态/权限/清理函数数/错误；按钮为启用 / 停用 / 重载（禁用条目上重载置灰），顶部「重新扫描」，底部显示插件目录与配置中的禁用清单。
 
-### 4. 阶段 B：插件注册 Agent Tool
+### 4. 阶段 B：插件注册 Agent Tool（✅ 已完成）
 
-- 插件 `ToolDefinition` 与 `createBuiltinTools()` 合并
-- 重名检测、作用域过滤、调用前二次权限检查
-- 启停同步 Session 的有效 Tool 集合
-- **注意**：必须在每个 Agent Session 上无条件注册授权扩展（无 `tool_call` 处理器时默认放行，所以注册不能省）
+| 文件 | 职责 |
+|---|---|
+| `packages/plugin/src/host/tools.ts` | 工具注册表：校验、查重、存活判定、`ToolDefinition` 生成（含超时与取消） |
+| `packages/plugin/src/host/context.ts` | `ctx.tools.register()`（权限 `tool:register` + 代次校验 + 自动撤销） |
+| `apps/server/src/agent-host.ts` | 合并进 `customTools`，并把工具名加进 `setActiveToolsByName` 的集合 |
+| `apps/server/src/http/routes/plugins.ts` | 启停后 `rebuildAgentSessions()`，让已有会话同步工具集 |
+
+要点：
+
+- **不覆盖内置工具**：`reservedToolNames` 由组合根传入（内置 + 已启用的 MCP 工具），同名注册直接失败，错误写进插件状态并在工作台可见。
+- **两个插件不能同名**：后来者失败并指出占用者，不静默覆盖。
+- **执行前复核**：`execute` 里每次都查插件是否仍 active、代次是否一致；停用后旧会话即使拿着定义也会被拒（有测试锁住）。
+- **作用域**：manifest `bots` 决定工具在哪些 Bot 的会话可见；对象 `useTools: false` 时整套工具都不激活。
+- **超时**：默认 30s（可声明 1s–120s），超时与外部取消都会中断执行，不挂住整轮对话。
+- **在途调用**：策略是「执行入口复核」而非等待/强杀——停用后新调用立即失败，旧调用靠 `signal` + 超时收敛。
+- 端到端测试 `apps/server/test/plugin-tool-session.test.ts` 用**真实** `createAgentSession`（只构造不发请求）验证工具确实进了激活集、停用后消失、`useTools: false` 时为空。
+
+**注意（原方案里的坑）**：如果改用扩展 `tool_call` handler 做授权，必须给每个 Session 无条件注册，否则「没有 handler = 默认放行」。本次没有走那条路——权限校验放在工具 `execute` 的统一入口，不依赖扩展是否存在。
 
 ---
 
@@ -178,9 +193,10 @@
 | P1 | `host.ts` | `hasActiveHandler()` 只判断有无订阅者，不能判断具体按钮是否被某插件认领（`cultivation:*` 这类） |
 | P2 | `plugin-bridge.ts` | `inboundReferences.take()` 只能消费一次；同一入站消息触发多个插件回复时，只有第一个拿到被动回复锚点 |
 | P2 | `storage.ts` | `readAll()` 吞掉解析异常返回 `{}`，损坏文件下次写入会被覆盖（数据丢失） |
-| — | 全局 | Tool 列表统一（`agent-host.ts` 的 `nativeToolNames` vs `http/present.ts` 的 `toolNames`/`toolCatalog`），阶段 B 处理 |
+| ✅ | `src/tool-names.ts` | 阶段 B 已收敛：`nativeToolNames` / `toolNames` / `auxiliaryToolNames` 单一来源，`present.ts`、`agent-host.ts`、`routes/tools.ts`、组合根的保留集都从这里取 |
+| P2 | `routes/plugins.ts` | 启停插件后无条件 `rebuildAgentSessions()`：若有会话正在流式回复会被中断。可改成 `anyAgentLoopRunning()` 为真时延后到空闲再重建 |
 
-P2 两项未修，需先确认语义再动：`take()` 改为引用计数会改变被动回复配额语义；`readAll()` 改为抛错会影响容错策略。
+P2 里两项需要先确认语义再动：`take()` 改为引用计数会改变被动回复配额语义；`readAll()` 改为抛错会影响容错策略。会话重建那条属已知取舍——插件启停是低频管理动作，先保证工具集正确。
 
 ---
 

@@ -176,6 +176,22 @@ export default definePlugin({
 
 建议对外暴露最小 `PluginContext`：`logger`、`events`、`config`、`storage`、`tools`、`messages`、`onDispose`，P1 才加入 `tasks` 与 `webui`。没有相应授权时，相关能力不可用或执行报错；**不要直接传入 Node `Server`、完整 Runtime、`AgentSession`、QQ SDK 或管理员凭据**。
 
+> **[现有] 已落地（2026-10-22，阶段 B）** — `ctx.tools.register()`，需要 manifest 声明 `"tool:register"`：
+>
+> ```ts
+> ctx.tools.register({
+>   name: "roll_dice",                 // 3–48 位小写蛇形，全局唯一
+>   description: "掷一个骰子",          // 模型靠它判断何时调用，不能为空
+>   parameters: { properties: { sides: { type: "integer", description: "面数" } } },
+>   timeoutMs: 30_000,                 // 可选，1s–120s，默认 30s
+>   async execute(input, { signal, logger }) {
+>     return { text: "掷出了 6" };     // 也可返回字符串；空字符串按失败处理
+>   },
+> });                                  // 返回撤销函数，停用时自动撤销
+> ```
+>
+> 宿主侧约束：工具名不能覆盖内置 / MCP 工具（注册即失败，错误写进插件状态）；两个插件同名同样失败并指明占用者；执行前复核插件是否仍启用、代次是否一致，停用后旧会话即使持有定义也会被拒绝；manifest 的 `bots` 决定工具在哪些 Bot 的会话里可见。
+
 Host 在 `setup()` 阶段登记 Tool / Handler，注册必须支持撤销；将返回的清理函数、事件订阅、定时器等纳入统一 Dispose 栈。Plugin 的一次加载不能因为多个 QQ 会话而重复执行。
 
 ## 6. 事件系统（P0）
@@ -601,7 +617,7 @@ Agent 主动发言是 Agent 行为策略，插件定时任务是通用调度机�
 
 **已知待办：**
 
-- 插件启停目前只在启动时按 `config.plugins` 执行一次，尚无运行时 API。
+- ~~插件启停目前只在启动时按 `config.plugins` 执行一次，尚无运行时 API。~~ 已由阶段 C 解决（`POST /api/plugins/:id/{enable,disable,reload}`）。
 - 示例插件用自身存储保存欢迎语默认值，等阶段 C 的 Schema Config 就位后应迁移到 manifest 配置声明。
 - `hasActiveHandler()` 只判断有无订阅者，不能判断具体按钮是否被某插件认领；留待按钮交互插件开发时完善。
 
@@ -609,11 +625,13 @@ Agent 主动发言是 Agent 行为策略，插件定时任务是通用调度机�
 
 ### 阶段 B：接入现有 Agent 能力（P0）
 
-- [ ] 让插件注册的 ToolDefinition 与现有 `createBuiltinTools()` 合并为当前会话可用工具。
-- [ ] Tool 重名检测、作用域过滤与调用前二次权限检查。
-- [ ] 启停同步现有 Session 的有效 Tool 集合，并解决在途调用问题。
+- [x] 让插件注册的 ToolDefinition 与现有 `createBuiltinTools()` 合并为当前会话可用工具。
+      `packages/plugin/src/host/tools.ts` 产出标准 `ToolDefinition`，`agent-host.ts` 走 `customTools` 通道注入。
+- [x] Tool 重名检测、作用域过滤与调用前二次权限检查（注册期查重 + 每次 `execute` 复核存活/代次 + `bots` 作用域）。
+- [x] 启停同步现有 Session 的有效 Tool 集合：管理 API 变更后 `rebuildAgentSessions()`。
+      在途调用策略为「执行入口复核」——停用后新调用立即失败，已取消的调用靠 `signal` 与超时收敛。
 - [ ] 可选的 Pi Extension factories 桥接至 `DefaultResourceLoader`。
-- [ ] 内置 Tools **不强制迁移成插件包**，先验证新旧工具共存。
+- [x] 内置 Tools **不强制迁移成插件包**，先验证新旧工具共存。
 
 ### 阶段 C：工作台管理闭环（P0→P1）
 

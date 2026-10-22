@@ -13,6 +13,7 @@ import { createPluginLifecycle, type PluginLifecycle, type PluginLifecycleState 
 import { loadPluginEntry } from "./loader.ts";
 import { loadManifest, MANIFEST_FILE, type PluginManifest } from "./manifest.ts";
 import { createSendRateLimiter, type SendRateLimitOptions } from "./rate-limit.ts";
+import { createPluginToolRegistry, type PluginToolDefinition, type PluginToolRegistry } from "./tools.ts";
 
 /** 一个已安装插件的状态快照，用于工作台与日志展示。 */
 export type PluginStatus = {
@@ -25,6 +26,8 @@ export type PluginStatus = {
 	permissions: string[];
 	/** 当前持有的清理函数数量，用于诊断资源泄漏。 */
 	disposers: number;
+	/** 该插件当前登记的工具名（停用后清空）。 */
+	tools: string[];
 	/**
 	 * 条目来源。
 	 *
@@ -64,6 +67,13 @@ export type PluginHostDependencies = {
 	sendRateLimit?: SendRateLimitOptions;
 	/** `setup()` 的超时上限，避免插件初始化挂起阻塞启动。默认 10 秒。 */
 	setupTimeoutMs?: number;
+	/**
+	 * 已被内置 / MCP 工具占用的名字。
+	 *
+	 * 插件工具不能覆盖它们，否则「模型以为在调用内置工具、实际跑了插件代码」。
+	 * 传回调而不是快照：MCP 服务器是运行时才连上的。
+	 */
+	reservedToolNames?: () => Iterable<string>;
 };
 
 type PluginEntry = {
@@ -102,6 +112,20 @@ export function createPluginHost(deps: PluginHostDependencies) {
 	 * 之间的启停互不阻塞。
 	 */
 	const operationQueues = new Map<string, Promise<unknown>>();
+	/**
+	 * 插件工具注册表。
+	 *
+	 * 存活判定绑在 `entries` 上而不是另存一份状态：插件停用或重启后，
+	 * 代次对不上就自动失效，不会出现「注册表说还有、实际已经停了」的错位。
+	 */
+	const tools: PluginToolRegistry = createPluginToolRegistry({
+		reservedNames: () => deps.reservedToolNames?.() ?? [],
+		isLive: (pluginId, generation) => {
+			const entry = entries.get(pluginId);
+			return Boolean(entry && entry.lifecycle.state === "active" && entry.lifecycle.generation === generation);
+		},
+		logger: deps.logger,
+	});
 	/**
 	 * 插件对平台事件的订阅包装。宿主只注册这一个订阅者，再自行扇出。
 	 *
@@ -205,6 +229,7 @@ export function createPluginHost(deps: PluginHostDependencies) {
 			...(entry.error ? { error: entry.error } : {}),
 			permissions: [...entry.manifest.permissions],
 			disposers: entry.lifecycle.disposerCount,
+			tools: tools.namesOf(entry.manifest.id),
 			source: entry.source,
 		};
 	}
@@ -342,6 +367,8 @@ export function createPluginHost(deps: PluginHostDependencies) {
 			},
 			storage: deps.storageFor(manifest.id),
 			logger: deps.logger,
+			registerTool: (pluginId, generation, definition: PluginToolDefinition) =>
+				tools.register({ pluginId, generation, botIds, definition }),
 		});
 		entry.context = context;
 		// 插件自定义的 dispose 登记在最前，因此清理时最后执行——此时能力已撤销，
@@ -399,6 +426,8 @@ export function createPluginHost(deps: PluginHostDependencies) {
 		// 插件自定义的 dispose 已登记为清理函数，与订阅取消一起按后进先出执行。
 		const { failures } = await entry.lifecycle.stop("请求停用");
 		entry.context = undefined;
+		// 清理函数已逐个撤销，这里再兜一层：插件若在 dispose 里重新注册，也不会留到停用之后。
+		tools.removeOwner(id);
 		for (const failure of failures) deps.logger.warn(`插件 ${id} 清理失败：${failure.error}`);
 		deps.logger.info(`插件已停用：${id}`);
 		// 没有剩余订阅者时断开总线，避免空转分发。
@@ -497,6 +526,12 @@ export function createPluginHost(deps: PluginHostDependencies) {
 		stopAll,
 		list,
 		get,
+		/** 当前存活工具，按会话的 Bot 作用域过滤。 */
+		tools: {
+			definitionsFor: tools.definitionsFor,
+			namesFor: tools.namesFor,
+			list: tools.list,
+		},
 		/**
 		 * 是否存在订阅了该事件类型的启用插件。
 		 *

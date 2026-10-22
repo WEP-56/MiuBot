@@ -28,6 +28,7 @@ function setup(permissions: PluginPermission[] = []) {
 			keys: vi.fn().mockResolvedValue(["a"]),
 		},
 		logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+		registerTool: () => () => {},
 	});
 	return { lifecycle, context, sendMessage, subscribes, unsubscribed };
 }
@@ -152,6 +153,7 @@ describe("plugin context permissions", () => {
 			sendMessage,
 			storage: { get: async () => undefined, set: async () => {}, delete: async () => {}, keys: async () => [] },
 			logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+			registerTool: () => () => {},
 		});
 		await context.messages.sendText("bot-9", { scope: "c2c", targetId: "u-1" }, "hi");
 		expect(sendMessage).toHaveBeenCalledOnce();

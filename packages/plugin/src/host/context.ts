@@ -8,6 +8,7 @@ import type { MessageTarget, PluginMessageSender, PluginTextOptions } from "@miu
 import type { PluginLifecycle } from "./lifecycle.ts";
 import { PluginInactiveError } from "./lifecycle.ts";
 import type { PluginPermission } from "./manifest.ts";
+import type { PluginToolDefinition } from "./tools.ts";
 
 /** 插件持久化存储接口。按插件 id 隔离命名空间，插件拿不到其它插件或 Miubot 全局配置。 */
 export interface PluginStorage {
@@ -32,6 +33,8 @@ export type PluginContext = {
 	readonly events: PluginEventSubscriber;
 	readonly messages: PluginMessageSender;
 	readonly storage: PluginStorage;
+	/** 注册 Agent Tool；需要 manifest 声明 `tool:register`。 */
+	readonly tools: PluginToolRegistrar;
 	/** 登记清理函数，停用时按后进先出顺序执行。 */
 	onDispose(disposer: () => void | Promise<void>): void;
 	/** 插件被停用时触发。是**本实例**的信号，不会被后续重启覆盖。 */
@@ -40,6 +43,11 @@ export type PluginContext = {
 	readonly generation: number;
 	/** 断言本实例仍然有效；跨越停用或重启边界后抛出 {@link PluginInactiveError}。 */
 	assertActive(action?: string): void;
+};
+
+/** 插件工具注册面。返回的函数用于提前撤销某一次注册。 */
+export type PluginToolRegistrar = {
+	register(definition: PluginToolDefinition): () => void;
 };
 
 /** 插件专用的事件订阅面：在只读契约之上增加「是否接收自身来源」的开关。 */
@@ -84,6 +92,8 @@ export type PluginContextDependencies = {
 	) => Promise<void>;
 	storage: PluginStorage;
 	logger: PluginLogger;
+	/** 工具注册入口；由宿主负责命名冲突与作用域，上下文只补权限与代次校验。 */
+	registerTool: (pluginId: string, generation: number, definition: PluginToolDefinition) => () => void;
 };
 
 /** 订阅权限覆盖：`event:*` 授权全部事件类型。 */
@@ -212,6 +222,22 @@ export function createPluginContext(deps: PluginContextDependencies): PluginCont
 					throw new PluginInactiveError(deps.manifestId, "未声明权限 storage:read");
 				}
 				return deps.storage.keys();
+			},
+		},
+		tools: {
+			register(definition) {
+				guard(`注册工具 ${definition.name}`);
+				if (!permissions.has("tool:register")) {
+					throw new PluginInactiveError(deps.manifestId, "未声明权限 tool:register");
+				}
+				// 宿主负责命名冲突与 Bot 作用域；这里只补「插件是否还有权注册」。
+				const unregister = deps.registerTool(deps.manifestId, generation, definition);
+				// 登记为清理函数：停用时自动撤销，插件自己也可以提前调用返回值撤销。
+				const untrack = lifecycle.track(unregister);
+				return () => {
+					untrack();
+					unregister();
+				};
 			},
 		},
 		onDispose: (disposer) => {

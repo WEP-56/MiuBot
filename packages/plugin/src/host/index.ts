@@ -7,6 +7,7 @@ export {
 	type PluginLogger,
 	type PluginSetup,
 	type PluginStorage,
+	type PluginToolRegistrar,
 } from "./context.ts";
 export {
 	createPluginHost,
@@ -41,3 +42,15 @@ export {
 	type SendRateLimitOptions,
 } from "./rate-limit.ts";
 export { createFileStorage, listStoredPlugins } from "./storage.ts";
+export {
+	createPluginToolRegistry,
+	type PluginToolContext,
+	type PluginToolDefinition,
+	type PluginToolParameter,
+	type PluginToolParameters,
+	type PluginToolRegistration,
+	type PluginToolRegistry,
+	type PluginToolRegistryDependencies,
+	type PluginToolResult,
+	validatePluginTool,
+} from "./tools.ts";
