@@ -175,6 +175,31 @@ describe("qq bot event attachment", () => {
 		expect(bot.acknowledgeInteraction).toHaveBeenLastCalledWith("interaction-1", 0);
 	});
 
+	it("prefers the host decision over subscriber counts", async () => {
+		const platform = createQqPlatform({ onEventError: vi.fn(), onSendError: vi.fn(), resolveBotId: () => "bot-1" });
+		// 宿主永久注册分发包装：订阅者数量恒 ≥ 1，只有在没有任何插件能处理时才拒绝。
+		platform.eventBus.subscribe("platform.interaction", () => {});
+		const canHandleInteraction = vi.fn().mockReturnValue(false);
+		const { bot, handlers } = fakeQqBot();
+		attachQqBotEvents({
+			bot,
+			botId: "bot-1",
+			eventBus: platform.eventBus,
+			onMessage: vi.fn(),
+			canHandleInteraction,
+		});
+
+		const event = { id: "interaction-2", scene: "group", group_openid: "g-1", data: { type: 11 } };
+		await handlers.get("interaction")?.(undefined as never, event as never);
+
+		expect(canHandleInteraction).toHaveBeenCalledWith({ id: "interaction-2", scope: "group" });
+		expect(bot.acknowledgeInteraction).toHaveBeenLastCalledWith("interaction-2", 3);
+
+		canHandleInteraction.mockReturnValue(true);
+		await handlers.get("interaction")?.(undefined as never, event as never);
+		expect(bot.acknowledgeInteraction).toHaveBeenLastCalledWith("interaction-2", 0);
+	});
+
 	it("forwards inbound messages and errors to the host", async () => {
 		const platform = createQqPlatform({ onEventError: vi.fn(), onSendError: vi.fn(), resolveBotId: () => "bot-1" });
 		const messages: QQBotInboundMessage[] = [];

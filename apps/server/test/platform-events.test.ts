@@ -1,7 +1,6 @@
 import type { QQBotInboundMessage } from "@tencent-connect/qqbot-nodejs";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-	createPlatformEventBus,
 	normalizeConnectionEvent,
 	normalizeInteractionEvent,
 	normalizeMessageEvent,
@@ -30,7 +29,7 @@ describe("platform event normalization", () => {
 	it("keeps unknown raw events instead of dropping them", () => {
 		const event = normalizeRawEvent("bot-1", "SOME_NEW_EVENT", { id: "evt-9", timestamp: "2026-10-21T00:00:00Z" });
 		expect(event.type).toBe("platform.raw");
-		expect(event.eventId).toBe("evt-9");
+		expect(event.dedupKey).toBe("evt-9");
 		expect(event.payload).toMatchObject({ rawEventType: "SOME_NEW_EVENT" });
 	});
 
@@ -50,6 +49,7 @@ describe("platform event normalization", () => {
 		expect(event.scope).toBe("group");
 		expect(event.peerId).toBe("group-1");
 		expect(event.payload).toMatchObject({ buttonData: "approve:42", buttonId: "btn-1", messageId: "msg-1" });
+		expect(event.dedupKey).toBe("interaction-1");
 	});
 
 	it("normalizes connection events and inbound messages", () => {
@@ -69,41 +69,26 @@ describe("platform event normalization", () => {
 		expect(message.type).toBe("message.received");
 		expect(message.peerId).toBe("group-1");
 		expect(message.payload).toMatchObject({ text: "hello", mentionedBot: true });
-	});
-});
-
-describe("platform event bus", () => {
-	it("isolates subscriber failures and timeouts", async () => {
-		const errors: unknown[] = [];
-		const bus = createPlatformEventBus({ timeoutMs: 20, onError: (error) => errors.push(error) });
-		const received: string[] = [];
-
-		bus.subscribe("platform.friend.added", () => {
-			throw new Error("boom");
-		});
-		bus.subscribe("platform.friend.added", () => new Promise<void>(() => {}));
-		const unsubscribe = bus.subscribe("platform.friend.added", () => {
-			received.push("ok");
-		});
-		bus.subscribe("*", (event) => {
-			received.push(`any:${event.type}`);
-		});
-
-		await bus.emit(normalizeRawEvent("bot-1", "FRIEND_ADD", { openid: "user-1" }));
-
-		expect(received).toEqual(["ok", "any:platform.friend.added"]);
-		expect(errors).toHaveLength(2);
-
-		unsubscribe();
-		expect(bus.listenerCount("platform.friend.added")).toBe(2);
+		expect(message.dedupKey).toBe("msg-1");
 	});
 
-	it("stops delivering after unsubscribe", async () => {
-		const bus = createPlatformEventBus();
-		const handler = vi.fn();
-		const unsubscribe = bus.subscribe("*", handler);
-		unsubscribe();
-		await bus.emit(normalizeConnectionEvent("bot-1", "platform.connection.ready"));
-		expect(handler).not.toHaveBeenCalled();
+	it("only sets dedupKey when the platform gives a stable identifier", () => {
+		// 没有 id 时不能编造幂等键：两条真实事件可能拥有完全相同的 payload。
+		const anonymous = normalizeRawEvent("bot-1", "GROUP_ADD_ROBOT", { group_openid: "group-1", timestamp: "T" });
+		expect(anonymous.dedupKey).toBeUndefined();
+		expect(anonymous.eventId).toBeTruthy();
+
+		// 相同输入两次归一化得到彼此独立的 eventId，但 fingerprint 一致。
+		const again = normalizeRawEvent("bot-1", "GROUP_ADD_ROBOT", { group_openid: "group-1", timestamp: "T" });
+		expect(again.eventId).not.toBe(anonymous.eventId);
+		expect(again.fingerprint).toBe(anonymous.fingerprint);
+	});
+
+	it("never deduplicates connection state changes", () => {
+		const ready = normalizeConnectionEvent("bot-1", "platform.connection.ready");
+		const lost = normalizeConnectionEvent("bot-1", "platform.connection.lost", { code: 1000 });
+		expect(ready.dedupKey).toBeUndefined();
+		expect(lost.dedupKey).toBeUndefined();
+		expect(ready.origin).toBe("platform");
 	});
 });

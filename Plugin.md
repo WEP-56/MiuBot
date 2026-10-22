@@ -182,15 +182,22 @@ Host 在 `setup()` 阶段登记 Tool / Handler，注册必须支持撤销；将�
 
 ### 6.1 事件来源和粒度
 
-> **[现有] 已落地（2026-10-22）** — 平台层位于 `apps/server/src/platform/`：
-> - `events.ts`：`NormalizedPlatformEvent`、`createPlatformEventBus`、各 `normalize*` 函数
+> **[现有] 已落地（2026-10-22）** — 平台层拆成「契约」与「QQ 实现」两半：
+>
+> 契约（SDK-free，跨包稳定，A0）位于 `packages/shared/src/platform/`：
+> - `events.ts`：`NormalizedPlatformEvent`、`PlatformEventSubscriber`（只读订阅面，无 `emit`）、`createPlatformEventBus`
+> - `messages.ts`：`NormalizedInboundMessage`、`MessageSegment`、`QuotedMessage`
+> - `outbound.ts`：`MessageTarget`、`PluginMessageSender`（插件唯一消息出口，不含 `msgId`）
+>
+> QQ 实现位于 `apps/server/src/platform/`：
+> - `events.ts`：QQ 事件映射表与 `normalize*` 函数（含 `dedupKey` / `fingerprint` / `origin` 语义）
 > - `inbound.ts`：`normalizeInboundMessage`（引用链 / 消息段 / 附件 / @ 列表）、`createMessageDeduplicator`、`acceptInboundMessage`（准入+去重）、`describeQuoteContext`
 > - `outbound.ts`：`createOutboundChannel`（分片 / 被动配额降级 / Markdown / 媒体 / C2C 流式）
 > - `runtime.ts`：`createQqPlatform()` 组装事件总线、入站去重与出站通道缓存（`channelFor(bot)`）
 > - `qq-adapter.ts`：`attachQqBotEvents()` 把 SDK 的 `ready` / `error` / `message` / `rawEvent` / `interaction` / `resumed` / `disconnected` 接到事件总线
 >
 > 接入点：`apps/server/src/index.ts` 作为组合根，只在 `connectQQ()` 里注入 Bot、日志与 `resolveBotId`，不再持有平台归一化逻辑。
-> 测试：`apps/server/test/platform-{events,inbound,outbound,qq}.test.ts`。
+> 测试：`packages/shared/test/platform-events.test.ts`、`apps/server/test/platform-{events,inbound,outbound,qq}.test.ts`。
 
 事件来源分两类：
 
@@ -214,7 +221,19 @@ Host 在 `setup()` 阶段登记 Tool / Handler，注册必须支持撤销；将�
 | `platform.connection.ready` / `resumed` / `lost` | 连接生命周期 |
 | `platform.raw` | 未列出的未知事件，保证不丢事件 |
 
-结构：`eventId`、`type`、`platform`、`botId`、`timestamp`、`scope?`、`peerId?`、`senderId?`、`payload`、`raw?`。原始平台字段只放在 `raw`。
+结构：`eventId`、`type`、`platform`、`botId`、`timestamp`、`scope?`、`peerId?`、`senderId?`、`payload`、`dedupKey?`、`fingerprint?`、`origin?`、`originPluginId?`、`causationId?`、`raw?`。原始平台字段只放在 `raw`。
+
+**幂等语义（A0 修正）：** 三个字段职责分离，不要混用：
+
+| 字段 | 语义 |
+| --- | --- |
+| `eventId` | 本次归一化事件的唯一标识；重投时会不同，**不能**当幂等键 |
+| `dedupKey` | 仅在平台给出稳定标识时填写（如 `messageId`、interaction id）；缺失表示「不可强制去重」 |
+| `fingerprint` | 内容哈希，只用于日志与诊断；两条真实事件可以拥有相同 payload，所以它不是幂等键 |
+
+规则：**没有可靠平台事件标识就不做强制去重。** 宁可让无法识别的重投事件再次进入插件，也不要静默丢弃合法事件。连接类事件（`platform.connection.*`）与 `message.sent` 永远不带 `dedupKey`——重连次数本身就是信息，去重会让状态机停在错误的一侧。
+
+**来源标记：** `origin`（`platform` / `agent` / `plugin` / `system`）+ `originPluginId` 由宿主发送桥接层填写，插件不能自行声明。宿主默认不把插件自己发出的事件回送给它，避免自激；`causationId` 记录父事件，用于限制事件触发链深度。跨插件循环（A → B → A）需要靠深度上限兜底。
 
 **重要修正（纠正早期设想）：** QQ 官方 API **没有「群成员加入」事件**，只有 `GROUP_ADD_ROBOT`（Bot 被拉进群）。因此：
 
@@ -232,9 +251,17 @@ Host 在 `setup()` 阶段登记 Tool / Handler，注册必须支持撤销；将�
 - 订阅返回撤销函数，停用插件时必须调用以释放监听。
 - 事件总线**没有**入站队列与背压；插件若做重活必须自行排队，或在后续阶段补 P1 队列。
 
+**取消语义（A0）：** Handler 签名是 `(event, signal) => void | Promise<void>`。超时不仅让 `Promise.race()` 返回，还会 `controller.abort()` 发出取消信号。但——
+
+> `signal` 只代表「已请求取消」，**不保证**异步 Handler 已实际停止。
+
+忽略信号的订阅者仍会在后台继续跑。所以插件宿主不能依赖 `signal` 保证一致性，必须额外维护：每个插件实例的 `AbortController`、`disposers` 栈、`active` 状态与运行代次；能力接口在每次调用时校验代次，插件被停用后即使 Handler 仍在跑，`ctx.messages.sendText()` 也必须被拒绝。
+
+**交互 ACK（A0）：** `attachQqBotEvents()` 接受可选的 `canHandleInteraction(event)` 决策函数，取代原先的 `listenerCount > 0` 判断。「有活跃订阅者」不等于「这个交互真的被处理了」——例如插件监听所有按钮却只认识自己的前缀。宿主永久注册分发包装后 `listenerCount` 恒 ≥ 1，按订阅数判断会永远回「已处理」。A2 接入时应由宿主按插件启用状态、Bot 授权范围与交互匹配器实现该决策函数。
+
 待补：
 
-- 一个事件可能重复到达；写操作需按 `eventId` 幂等。入站消息已用 `createMessageDeduplicator` 去重，插件侧写操作仍需自行保证。
+- `dedupKey` 已就位，但宿主级强制去重策略尚未实现（A1/A2）。入站消息已用 `createMessageDeduplicator` 去重。
 - 不将 Event Handler 等同于模型 Tool 执行。它可以不用 LLM；若调用 LLM，也应通过宿主服务接口并接受成本与权限限制。
 
 ### 6.3 入站消息（[现有]）
@@ -270,6 +297,29 @@ Host 在 `setup()` 阶段登记 Tool / Handler，注册必须支持撤销；将�
 | 发送观察 | `onSent` 回调驱动 `message.sent` 事件，用于审计与统计 |
 
 **已知缺口：** `message.sent` 的 `botId` 在无法反查时退化为 `default`；单 Bot 场景无影响，多 Bot 场景需在 Plugin Host 接入时补严格映射。
+
+**插件出口契约（A0）：** 插件看到的是 `@miubot/shared/platform/outbound` 的 `PluginMessageSender`：
+
+```ts
+sendText(botId: string, target: MessageTarget, text: string, options?: PluginTextOptions): Promise<void>
+```
+
+`MessageTarget` 只有 `scope` + `targetId`，**不含 `msgId`**。调用链是：
+
+```text
+插件 ctx.messages.sendText
+  ↓ 宿主权限检查 + 生命周期代次检查
+Server Message Bridge（A2）
+  ↓ botId → QQBot → 反查入站 msgId
+现有 OutboundChannel
+  ↓
+QQ API
+```
+
+插件既不持有 `QQBot`，也不需要知道 `OutboundChannel`。A2 实现桥接时必须遵守两点：
+
+1. **不能把反查到的最近一条 `msgId` 无条件当作可用凭据。** 需校验平台允许的时间窗口、消息类型等限制；没有有效回复上下文时走合法主动消息路径，或明确返回不可发送，不能拿过期 `msgId` 硬发。
+2. **优先使用触发当前回调的事件自带的回复上下文**，最近消息映射只作补充，避免多条消息交错时回错对象。
 
 ## 7. Agent Tool 桥接（P0）
 
@@ -471,6 +521,14 @@ Agent 主动发言是 Agent 行为策略，插件定时任务是通用调度机�
 
 **管理面安全前置条件：** 公开源码目前可见通用 `OPTIONS` 响应设置 `Access-Control-Allow-Origin: *`，而服务通常监听本机地址。后续一旦允许远程访问、插件安装、修改插件密钥和管理员凭据，就必须重新梳理**管理 API 的身份认证、浏览器 Origin / CORS、CSRF、监听地址与远程暴露策略**。不能因为初期绑定 loopback 就假定管理接口天然安全，也不能把插件自身管理员密码复用为 Miubot 管理凭据。
 
+**独立安全任务（优先级已提升，与插件解耦）：** 现状不只是 CORS 问题——`/api/*` **无任何认证**，且任意网页都因 `Access-Control-Allow-Origin: *` 能跨域读取：
+
+- `GET /api/sessions/:id` 返回完整会话，含全部聊天记录（列表接口的 `publicSession` 脱敏了，详情接口没有）。
+- `GET /api/logs` 返回运行日志。
+- `GET /api/peers` 返回所有群/用户 OpenID 与备注名。
+
+`publicConfig` 脱敏了 `apiKey`，但不改变上述三条。这有独立修复价值，不依赖插件系统。修复要点：**敏感 GET 同样需要认证**（Origin 检查不是认证，也不能阻止非浏览器客户端）；允许的 Origin 收敛到开发 Web 地址；修改类请求落实 CSRF 或等效来源保护；保持本机绑定并检查 Host / DNS rebinding 风险。**在实现插件配置管理 API、密钥读取或插件安装接口之前必须完成。**
+
 ## 14. 实际开发顺序
 
 ### 阶段 0：平台层底座（[现有]，2026-10-22 已完成）
@@ -486,12 +544,40 @@ Agent 主动发言是 Agent 行为策略，插件定时任务是通用调度机�
 
 ### 阶段 A：最小服务级 Plugin Host（P0）
 
-- [ ] 确定 Manifest 格式、API 版本与 Schema 校验。
-- [x] ~~提供最小 Event Dispatcher~~（已在阶段 0 完成：`createPlatformEventBus`）。
-- [ ] 创建服务级 `PluginHost`：发现、本地加载、启动、停止、dispose、状态与日志。
-- [ ] 实现 Config 读写 / 校验与独立 Storage 命名空间。
-- [ ] 编写一个**纯事件插件**（Bot 入群欢迎或关键词回复），证明无 Agent Session 也能工作。
-- [ ] 建立"插件 → 出站通道"的受控注入；插件**不得**直接持有 `QQBot`。
+拆成 A0–A3 四步，每步独立可测。
+
+**A0：平台契约稳定化（[现有]，2026-10-22 已完成）**
+
+- [x] SDK-free 契约迁入 `packages/shared/src/platform/`（`events.ts` / `messages.ts` / `outbound.ts`）。
+- [x] 分离 `PlatformEventSubscriber`（只读订阅面）与平台内部完整 `PlatformEventBus`（含 `emit`）。
+- [x] Handler 签名增加 `AbortSignal`；超时同时 `abort()`；补取消信号传播测试。
+- [x] 定义 `MessageTarget` / `PluginMessageSender`，不含 `msgId` 反查实现。
+- [x] Interaction ACK 改为独立决策接口 `canHandleInteraction`，不再依赖订阅数量。
+- [x] 规范事件来源元数据（`origin` / `originPluginId` / `causationId`）与去重语义（`eventId` / `dedupKey` / `fingerprint` 分离）。
+- [x] 验收：`npm run check` / `npm run lint` / `npm test` 全绿，无 `packages → apps` 逆向依赖。
+
+**A1：Plugin Host 本体**
+
+- [ ] Manifest 格式（`miubot.plugin.json`）、`schemaVersion` 与 Schema 校验。
+- [ ] 服务级 `PluginHost`：发现、本地加载、启动、停止、dispose、状态与日志。
+- [ ] Config 读写 / 校验与独立 Storage 命名空间。
+- [ ] 每插件实例的 `AbortController` + `disposers` 栈 + 运行代次；能力接口按代次拒绝失效插件。
+- [ ] 宿主级 `dedupKey` 去重策略。
+
+**A2：受控平台能力注入**
+
+- [ ] Server 注入 `botId → QQBot` 解析与有界入站消息映射（`msgId` 反查）。
+- [ ] 实现 `PluginMessageSender` 桥接：权限检查 + 生命周期检查 + 复用 `OutboundChannel`。
+- [ ] 实现 `canHandleInteraction`，按插件启用状态、Bot 授权范围与交互匹配器判断。
+- [ ] 事件分发包装：默认过滤插件自身来源，限制触发链深度。
+- [ ] 验收：未授权插件不能发消息；已禁用插件的在途回调不能继续发送。
+
+**A3：第一个真实插件**
+
+- [ ] `miubot.welcome`：监听 `platform.group.bot_added`，读取欢迎文本配置，通过宿主接口发送。
+- [ ] 验收：重启、重复事件、禁用、Bot 断线、发送失败等行为正确。
+
+**范围冻结：** 阶段 A 只支持开发者手工放置、明确可信的本地插件，**不提供**网页上传安装、远程安装或插件市场。TypeScript 插件一旦被加载进 Node.js 进程就拥有与 Miubot 同等的进程权限——Manifest 权限声明、`ctx` 能力限制都不能把不可信 JavaScript 变成安全代码。
 
 ### 阶段 B：接入现有 Agent 能力（P0）
 

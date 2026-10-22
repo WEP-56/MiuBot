@@ -1,10 +1,16 @@
+import type { PlatformEventBus } from "@miubot/shared/platform/events";
 import type { QQBot, QQBotInboundMessage } from "@tencent-connect/qqbot-nodejs";
-import {
-	normalizeConnectionEvent,
-	normalizeInteractionEvent,
-	normalizeRawEvent,
-	type PlatformEventBus,
-} from "./events.ts";
+import { normalizeConnectionEvent, normalizeInteractionEvent, normalizeRawEvent } from "./events.ts";
+
+/**
+ * Interaction ACK 决策。
+ *
+ * 用独立的窄接口取代「订阅者数量」判断：「有活跃订阅者」不等于「这个交互真的被处理了」。
+ * 例如修仙插件监听所有按钮，却只认识 `cultivation:*`，此时不应声称已处理。
+ *
+ * 返回 `true` 表示已有处理方接手，平台侧收到「成功」；返回 `false` 时回 `3`（忽略/未匹配）。
+ */
+export type InteractionAckDecision = (event: { id: string; scope: "group" | "c2c" }) => boolean;
 
 export type QqBotAdapterOptions = {
 	bot: QQBot;
@@ -15,7 +21,16 @@ export type QqBotAdapterOptions = {
 	/** `ready` 事件派发后调用，宿主在此同步连接状态与 Bot 资料。 */
 	onReady?: (bot: QQBot) => void;
 	onError?: (error: unknown) => void;
+	/**
+	 * 交互 ACK 决策。缺省时退化为「有 `platform.interaction` 订阅者即视为已处理」，
+	 * 仅适用于没有插件宿主的场合；接入 Plugin Host 后必须由宿主注入。
+	 */
+	canHandleInteraction?: InteractionAckDecision;
 };
+
+/** ACK 码：0 = 成功处理，3 = 忽略/未匹配（避免平台侧一直等待）。 */
+const ACK_HANDLED = 0;
+const ACK_IGNORED = 3;
 
 /**
  * 把 QQ SDK 的具名事件与透传事件统一接到服务级事件总线。
@@ -46,13 +61,14 @@ export function attachQqBotEvents(options: QqBotAdapterOptions): void {
 	});
 
 	bot.on("interaction", async (_context, event) => {
+		const normalized = normalizeInteractionEvent(botId, event);
+		const handled = options.canHandleInteraction
+			? options.canHandleInteraction({ id: event.id, scope: normalized.scope === "group" ? "group" : "c2c" })
+			: eventBus.listenerCount("platform.interaction") > 0;
 		try {
-			await eventBus.emit(normalizeInteractionEvent(botId, event));
+			await eventBus.emit(normalized);
 		} finally {
-			// 3 = 忽略/未匹配；插件未处理时避免平台侧一直等待。
-			await bot
-				.acknowledgeInteraction(event.id, eventBus.listenerCount("platform.interaction") > 0 ? 0 : 3)
-				.catch(() => {});
+			await bot.acknowledgeInteraction(event.id, handled ? ACK_HANDLED : ACK_IGNORED).catch(() => {});
 		}
 	});
 

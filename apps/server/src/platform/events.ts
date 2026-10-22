@@ -1,50 +1,6 @@
+import { createHash } from "node:crypto";
+import type { NormalizedPlatformEvent, PlatformEventType, PlatformScope } from "@miubot/shared/platform/events";
 import type { InteractionEvent, QQBotInboundMessage } from "@tencent-connect/qqbot-nodejs";
-
-/**
- * 标准平台事件。
- *
- * QQ 官方 Gateway 只把 C2C / 群消息与按钮交互派发成具名事件，其余生命周期事件统一从
- * `rawEvent` 透传（见 qqbot-nodejs `event-dispatcher.js`：未识别事件返回 `action: "raw"`）。
- * 这里把两类来源归一成同一份契约，插件与业务层只消费标准事件。
- */
-export type PlatformEventType =
-	| "message.received"
-	| "message.sent"
-	| "platform.interaction"
-	| "platform.group.bot_added"
-	| "platform.group.bot_removed"
-	| "platform.group.message_rejected"
-	| "platform.group.message_allowed"
-	| "platform.c2c.message_rejected"
-	| "platform.c2c.message_allowed"
-	| "platform.friend.added"
-	| "platform.friend.removed"
-	| "platform.guild.member_added"
-	| "platform.guild.member_removed"
-	| "platform.reaction.added"
-	| "platform.reaction.removed"
-	| "platform.connection.ready"
-	| "platform.connection.resumed"
-	| "platform.connection.lost"
-	| "platform.raw";
-
-export type PlatformScope = "group" | "c2c" | "guild" | "dm";
-
-export type NormalizedPlatformEvent = {
-	/** 幂等键：同一事件重复到达（重连重投）时保持不变。 */
-	eventId: string;
-	type: PlatformEventType;
-	platform: "qq";
-	botId: string;
-	timestamp: string;
-	scope?: PlatformScope;
-	/** 会话对象 ID：群 OpenID 或用户 OpenID。 */
-	peerId?: string;
-	senderId?: string;
-	payload: Record<string, unknown>;
-	/** 原始平台数据，字段不稳定，仅供诊断与高级订阅。 */
-	raw?: unknown;
-};
 
 /** 原始事件类型 → 标准事件类型。未列出的走 `platform.raw`，保证不丢事件。 */
 const RAW_EVENT_MAP: Record<string, PlatformEventType> = {
@@ -96,26 +52,50 @@ function pickPeerId(data: Record<string, unknown>): string | undefined {
 	);
 }
 
-/** 把 `rawEvent` 的透传数据归一化成标准事件。未知事件保留为 `platform.raw`。 */
+/**
+ * 内容指纹：仅用于日志与诊断。
+ *
+ * 它**不能**当作幂等键——两条真实事件可以拥有完全相同的 payload，重投也可能附带变化的元数据。
+ */
+function fingerprintOf(data: unknown): string | undefined {
+	if (data === undefined) return undefined;
+	try {
+		return createHash("sha256")
+			.update(JSON.stringify(data) ?? "")
+			.digest("hex")
+			.slice(0, 16);
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * 把 `rawEvent` 的透传数据归一化成标准事件。未知事件保留为 `platform.raw`。
+ *
+ * QQ 只在少数事件上给出稳定 `id`；没有时**不填** `dedupKey`，由宿主按“不可强制去重”处理，
+ * 避免把两次真实事件误判成重投。
+ */
 export function normalizeRawEvent(botId: string, eventType: string, data: unknown): NormalizedPlatformEvent {
 	const record = asRecord(data);
 	const type = RAW_EVENT_MAP[eventType] ?? "platform.raw";
 	const scope = SCOPE_BY_EVENT[eventType];
 	const peerId = pickPeerId(record);
-	const eventId =
-		readString(record, "id") ?? `${botId}:${eventType}:${readString(record, "timestamp") ?? ""}:${peerId ?? ""}`;
+	const platformId = readString(record, "id");
+	const senderId = readString(record, "op_member_openid") ?? readString(record, "user_openid");
+	const fingerprint = fingerprintOf(data);
 	return {
-		eventId,
+		eventId: platformId ?? crypto.randomUUID(),
 		type,
 		platform: "qq",
 		botId,
 		timestamp: readString(record, "timestamp") ?? new Date().toISOString(),
 		...(scope ? { scope } : {}),
 		...(peerId ? { peerId } : {}),
-		...((readString(record, "op_member_openid") ?? readString(record, "user_openid"))
-			? { senderId: readString(record, "op_member_openid") ?? readString(record, "user_openid") }
-			: {}),
+		...(senderId ? { senderId } : {}),
 		payload: { rawEventType: eventType, ...record },
+		...(platformId ? { dedupKey: platformId } : {}),
+		...(fingerprint ? { fingerprint } : {}),
+		origin: "platform",
 		raw: data,
 	};
 }
@@ -148,6 +128,9 @@ export function normalizeInteractionEvent(botId: string, event: InteractionEvent
 			messageId: resolved?.message_id,
 			...(event.chat_type === undefined ? {} : { chatType: event.chat_type }),
 		},
+		// 按钮交互的事件 id 由平台提供且稳定，可安全用于幂等。
+		dedupKey: event.id,
+		origin: "platform",
 		raw: event,
 	};
 }
@@ -171,89 +154,30 @@ export function normalizeMessageEvent(botId: string, message: QQBotInboundMessag
 			mentionedBot: (message.mentions ?? []).some((mention) => mention.is_you === true),
 			...(message.refMsgIdx ? { refMsgIdx: message.refMsgIdx } : {}),
 		},
+		dedupKey: message.messageId,
+		origin: "platform",
 		raw: message.raw,
 	};
 }
 
-/** 连接状态事件（ready / resumed / 断开）。 */
+/**
+ * 连接状态事件（ready / resumed / 断开）。
+ *
+ * 连接事件永远不带 `dedupKey`：断线重连的次数本身就是信息，去重会让状态机停在错误的一侧。
+ */
 export function normalizeConnectionEvent(
 	botId: string,
 	type: "platform.connection.ready" | "platform.connection.resumed" | "platform.connection.lost",
 	detail?: unknown,
 ): NormalizedPlatformEvent {
 	return {
-		eventId: `${botId}:${type}:${Date.now()}`,
+		eventId: crypto.randomUUID(),
 		type,
 		platform: "qq",
 		botId,
 		timestamp: new Date().toISOString(),
 		payload: asRecord(detail),
+		origin: "platform",
 		...(detail === undefined ? {} : { raw: detail }),
 	};
 }
-
-export type PlatformEventHandler = (event: NormalizedPlatformEvent) => void | Promise<void>;
-
-export type PlatformEventBusOptions = {
-	/** 单个订阅者的超时，超时只记录不阻断其它订阅者。 */
-	timeoutMs?: number;
-	onError?: (error: unknown, event: NormalizedPlatformEvent, type: string) => void;
-};
-
-/**
- * 服务级事件总线。
- *
- * 一个订阅者抛错或超时不影响其它订阅者，也不阻断主消息流水线——插件与业务逻辑共享这条契约。
- */
-export function createPlatformEventBus(options: PlatformEventBusOptions = {}) {
-	const timeoutMs = options.timeoutMs ?? 5_000;
-	const handlers = new Map<string, Set<PlatformEventHandler>>();
-
-	function subscribe(type: PlatformEventType | "*", handler: PlatformEventHandler): () => void {
-		const set = handlers.get(type) ?? new Set<PlatformEventHandler>();
-		set.add(handler);
-		handlers.set(type, set);
-		return () => {
-			const current = handlers.get(type);
-			if (!current) return;
-			current.delete(handler);
-			if (current.size === 0) handlers.delete(type);
-		};
-	}
-
-	async function runHandler(
-		event: NormalizedPlatformEvent,
-		type: string,
-		handler: PlatformEventHandler,
-	): Promise<void> {
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		try {
-			await Promise.race([
-				Promise.resolve(handler(event)),
-				new Promise<void>((resolve) => {
-					timer = setTimeout(() => {
-						options.onError?.(new Error(`事件订阅者超时 ${timeoutMs}ms（${type}）`), event, type);
-						resolve();
-					}, timeoutMs);
-				}),
-			]);
-		} catch (error) {
-			options.onError?.(error, event, type);
-		} finally {
-			if (timer) clearTimeout(timer);
-		}
-	}
-
-	async function emit(event: NormalizedPlatformEvent): Promise<void> {
-		const targets = [...(handlers.get(event.type) ?? []), ...(handlers.get("*") ?? [])];
-		await Promise.all(targets.map((handler) => runHandler(event, event.type, handler)));
-	}
-
-	function listenerCount(type: PlatformEventType | "*"): number {
-		return handlers.get(type)?.size ?? 0;
-	}
-
-	return { subscribe, emit, listenerCount };
-}
-
-export type PlatformEventBus = ReturnType<typeof createPlatformEventBus>;

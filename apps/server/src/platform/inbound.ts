@@ -1,58 +1,13 @@
+import type {
+	InboundAttachment,
+	MessageSegment,
+	NormalizedInboundMessage,
+	QuotedMessage,
+} from "@miubot/shared/platform/messages";
 import type { QQBotInboundMessage } from "@tencent-connect/qqbot-nodejs";
 
-/** 一条消息里的语义片段。原始平台字段保留在 `raw` 中，业务代码优先消费标准字段。 */
-export type MessageSegment =
-	| { type: "text"; text: string }
-	| { type: "mention"; openId?: string; name?: string; isBot: boolean; isAll: boolean }
-	| { type: "image"; url: string; mimeType: string; fileName?: string }
-	| { type: "audio"; url: string; mimeType: string; fileName?: string; wavUrl?: string; transcript?: string }
-	| { type: "video"; url: string; mimeType: string; fileName?: string }
-	| { type: "file"; url: string; mimeType: string; fileName?: string };
-
-/** 被引用的消息。`source` 说明内容从引用索引命中还是从推送的 msg_elements 兜底。 */
-export type QuotedMessage = {
-	source: "msg_elements";
-	/** 被引用消息的 msg_idx。 */
-	refMsgIdx: string;
-	text: string;
-	attachments: Array<{ contentType: string; url: string; fileName?: string; transcript?: string }>;
-};
-
-export type NormalizedInboundMessage = {
-	/** 平台消息 ID，用作去重与幂等键。 */
-	messageId: string;
-	kind: "c2c" | "group" | "guild" | "dm";
-	scope: "group" | "c2c" | "guild" | "dm";
-	botId: string;
-	peerId: string;
-	senderId: string;
-	senderName?: string;
-	senderIsBot: boolean;
-	/** 去掉 @bot 标记后的正文。 */
-	text: string;
-	/** 原始正文（含 @ 标记）。 */
-	rawText: string;
-	mentionedBot: boolean;
-	/** 被 @ 的其他成员。 */
-	mentions: Array<{ openId?: string; name?: string; isBot: boolean; isAll: boolean }>;
-	segments: MessageSegment[];
-	attachments: Array<{
-		kind: MessageSegment["type"];
-		url: string;
-		mimeType: string;
-		fileName?: string;
-		wavUrl?: string;
-		transcript?: string;
-	}>;
-	quote?: QuotedMessage;
-	timestamp: string;
-	msgType?: number;
-	msgIdx?: string;
-	/** 平台附带的场景信息（来源、扩展参数），字段随平台变化。 */
-	messageScene?: { source?: string; ext?: string[] };
-	/** 原始平台消息，仅诊断用。 */
-	raw: unknown;
-};
+// 契约类型统一由 `@miubot/shared/platform/messages` 持有；这里只实现 QQ 专有的归一化。
+export type { InboundAttachment, MessageSegment, NormalizedInboundMessage, QuotedMessage };
 
 function mediaKind(mimeType: string): MessageSegment["type"] {
 	if (mimeType.startsWith("image/")) return "image";
