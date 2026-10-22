@@ -1,9 +1,9 @@
 import { createInterface } from "node:readline";
 import type { AgentTool } from "@miubot/agent";
+import { ensureTool } from "@miubot/shared/utils/tools-manager";
 import { spawn } from "child_process";
 import path from "path";
 import { type Static, Type } from "typebox";
-import { ensureTool } from "@miubot/shared/utils/tools-manager";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { pathExists, resolveToCwd } from "./path-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";

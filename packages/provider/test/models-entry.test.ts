@@ -50,9 +50,9 @@ describe("lightweight models entry", () => {
 				process.execPath,
 				["--conditions=source", "--import", preload, "--input-type=module", "--eval", script],
 				{
-				cwd: packageRoot,
-				encoding: "utf8",
-				timeout: 10_000,
+					cwd: packageRoot,
+					encoding: "utf8",
+					timeout: 10_000,
 				},
 			);
 			expect(result.error).toBeUndefined();

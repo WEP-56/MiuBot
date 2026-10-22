@@ -34,9 +34,7 @@ function getEnv(): NodeJS.ProcessEnv {
 
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
-import ignore from "ignore";
-import { minimatch } from "minimatch";
-import { gt, maxSatisfying, rcompare, satisfies, valid, validRange } from "semver";
+import { BUILTIN_PATH_PREFIX } from "@miubot/context/source-info";
 import { CONFIG_DIR_NAME } from "@miubot/shared/config";
 import { spawnProcess, spawnProcessSync } from "@miubot/shared/utils/child-process";
 import { type GitSource, parseGitUrl } from "@miubot/shared/utils/git";
@@ -48,10 +46,12 @@ import {
 	resolvePath,
 } from "@miubot/shared/utils/paths";
 import { stripBom } from "@miubot/shared/utils/text";
+import ignore from "ignore";
+import { minimatch } from "minimatch";
+import { gt, maxSatisfying, rcompare, satisfies, valid, validRange } from "semver";
 import { isStdoutTakenOver } from "./output-guard.ts";
 import { type PiManifest, readPiManifest } from "./pi-manifest.ts";
 import type { PackageSource, SettingsManager } from "./settings-manager.ts";
-import { BUILTIN_PATH_PREFIX } from "@miubot/context/source-info";
 
 const NETWORK_TIMEOUT_MS = 10000;
 const UPDATE_CHECK_CONCURRENCY = 4;

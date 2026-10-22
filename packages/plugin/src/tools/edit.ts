@@ -1,8 +1,8 @@
 import type { AgentTool } from "@miubot/agent";
+import { splitBom } from "@miubot/shared/utils/text";
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile, writeFile as fsWriteFile } from "fs/promises";
 import { type Static, Type } from "typebox";
-import { splitBom } from "@miubot/shared/utils/text";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import {
 	applyEditsToNormalizedContent,

@@ -1,6 +1,6 @@
-import { APP_NAME, CONFIG_DIR_NAME } from "@miubot/shared/config";
 import { emitProjectTrustEvent } from "@miubot/plugin/extensions/runner";
 import type { LoadExtensionsResult, ProjectTrustContext } from "@miubot/plugin/extensions/types";
+import { APP_NAME, CONFIG_DIR_NAME } from "@miubot/shared/config";
 import { SETTINGS_DEFAULTS } from "./settings-defaults.ts";
 import type { DefaultProjectTrust } from "./settings-manager.ts";
 import {

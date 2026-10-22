@@ -29,6 +29,8 @@
 			"packages/*/test/**/*.ts",
 			"apps/*/src/**/*.ts",
 			"!**/node_modules/**/*",
+			"!example",
+			"!ui-ux-design",
 			"!**/*.models.ts",
 			"!**/models.generated.ts"
 		]

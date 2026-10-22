@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME } from "@miubot/shared/config";
 import { canonicalizePath, resolvePath } from "@miubot/shared/utils/paths";
 import { stripBom } from "@miubot/shared/utils/text";
+import lockfile from "proper-lockfile";
 
 export type ProjectTrustDecision = boolean | null;
 

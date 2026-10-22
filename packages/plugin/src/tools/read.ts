@@ -1,10 +1,10 @@
 import type { AgentTool } from "@miubot/agent";
 import type { Api, ImageContent, Model, ModelImageResizeOptions, TextContent } from "@miubot/provider";
+import { processImage } from "@miubot/shared/utils/image-process";
+import { detectSupportedImageMimeTypeFromFile } from "@miubot/shared/utils/mime";
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile } from "fs/promises";
 import { type Static, Type } from "typebox";
-import { processImage } from "@miubot/shared/utils/image-process";
-import { detectSupportedImageMimeTypeFromFile } from "@miubot/shared/utils/mime";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { resolveReadPathAsync } from "./path-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";

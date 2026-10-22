@@ -7,19 +7,24 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createSyntheticSourceInfo, getSyntheticPathSource, isSyntheticPath } from "@miubot/context/source-info";
 import type { Provider } from "@miubot/provider";
-import type { KeyId } from "@miubot/shared/terminal";
-import type { createJiti } from "jiti";
-import { CONFIG_DIR_NAME, getAgentDir, isBunBinary, isBundledNode } from "@miubot/shared/config";
-import { resolvePath } from "@miubot/shared/utils/paths";
 import { createEventBus, type EventBus } from "@miubot/session/event-bus";
 import type { ExecOptions } from "@miubot/session/exec";
 import { execCommand } from "@miubot/session/exec";
-import { type McpServerConfig, McpServerRegistry, mcpNamespace, validateMcpServerConfig } from "@miubot/session/mcp-servers";
+import {
+	type McpServerConfig,
+	McpServerRegistry,
+	mcpNamespace,
+	validateMcpServerConfig,
+} from "@miubot/session/mcp-servers";
 import { readPiManifest } from "@miubot/session/pi-manifest";
-import { createSyntheticSourceInfo, getSyntheticPathSource, isSyntheticPath } from "@miubot/context/source-info";
 import { time } from "@miubot/session/timings";
 import type { ModelRouteRequest, VirtualModelDefinition } from "@miubot/session/virtual-models";
+import { CONFIG_DIR_NAME, getAgentDir, isBunBinary, isBundledNode } from "@miubot/shared/config";
+import type { KeyId } from "@miubot/shared/terminal";
+import { resolvePath } from "@miubot/shared/utils/paths";
+import type { createJiti } from "jiti";
 import type {
 	EntryRenderer,
 	Extension,

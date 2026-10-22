@@ -1,9 +1,9 @@
 import { join } from "node:path";
 import type { ThinkingLevel } from "@miubot/agent";
+import type { SessionStartEvent, ToolDefinition } from "@miubot/plugin/extensions/index";
 import type { Model } from "@miubot/provider";
 import { getAgentDir } from "@miubot/shared/config";
 import { resolvePath } from "@miubot/shared/utils/paths";
-import type { SessionStartEvent, ToolDefinition } from "@miubot/plugin/extensions/index";
 import { ModelRuntime } from "./model-runtime.ts";
 import {
 	DefaultResourceLoader,

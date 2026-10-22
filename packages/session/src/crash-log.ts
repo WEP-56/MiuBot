@@ -1,8 +1,8 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { getAgentDir, VERSION } from "@miubot/shared/config";
-import type { Extension } from "@miubot/plugin/extensions/types";
 import { isSyntheticPath } from "@miubot/context/source-info";
+import type { Extension } from "@miubot/plugin/extensions/types";
+import { getAgentDir, VERSION } from "@miubot/shared/config";
 
 export interface CrashRecord {
 	timestamp: string;

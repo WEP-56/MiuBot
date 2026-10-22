@@ -9,13 +9,7 @@
  */
 
 import { type Static, Type } from "typebox";
-import type {
-	ExtensionAPI,
-	ToolDefinition,
-	ToolExposure,
-	ToolInfo,
-	ToolNamespace,
-} from "../extensions/types.ts";
+import type { ExtensionAPI, ToolDefinition, ToolExposure, ToolInfo, ToolNamespace } from "../extensions/types.ts";
 
 export const TOOL_SEARCH_TOOL_NAME = "tool_search";
 export const DEFAULT_TOOL_SEARCH_LIMIT = 8;

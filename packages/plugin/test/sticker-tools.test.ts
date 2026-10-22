@@ -3,16 +3,34 @@ import { createStickerTools } from "../src/tools/stickers/tools.ts";
 
 describe("sticker tools", () => {
 	it("enforces authorization and sends only approved search results", async () => {
-		const sticker = { id: "sticker-1", fileName: "cat.png", description: "开心猫猫", tags: ["开心"], status: "approved" as const };
+		const sticker = {
+			id: "sticker-1",
+			fileName: "cat.png",
+			description: "开心猫猫",
+			tags: ["开心"],
+			status: "approved" as const,
+		};
 		let usageCount = 0;
 		const store = {
-			async search() { return [sticker]; },
-			async get(id: string) { return id === sticker.id ? sticker : undefined; },
-			async incrementUsage() { usageCount++; },
+			async search() {
+				return [sticker];
+			},
+			async get(id: string) {
+				return id === sticker.id ? sticker : undefined;
+			},
+			async incrementUsage() {
+				usageCount++;
+			},
 		};
 		const send = vi.fn().mockResolvedValue(undefined);
 		let authorized = false;
-		const [search, sendTool] = createStickerTools(store, () => authorized, async (item) => { await send(item.id); });
+		const [search, sendTool] = createStickerTools(
+			store,
+			() => authorized,
+			async (item) => {
+				await send(item.id);
+			},
+		);
 		const context = {} as Parameters<typeof search.execute>[4];
 		expect((await search.execute("1", { query: "开心" }, undefined, undefined, context)).isError).toBe(true);
 		authorized = true;

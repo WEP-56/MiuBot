@@ -1,8 +1,8 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "fs";
-import { basename, dirname, join, resolve, sep } from "path";
 import { CONFIG_DIR_NAME } from "@miubot/shared/config";
 import { parseFrontmatter } from "@miubot/shared/utils/frontmatter";
 import { resolvePath } from "@miubot/shared/utils/paths";
+import { existsSync, readdirSync, readFileSync, statSync } from "fs";
+import { basename, dirname, join, resolve, sep } from "path";
 import type { ResourceDiagnostic } from "./diagnostics.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
 

@@ -4,14 +4,14 @@
  */
 
 import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore } from "@miubot/provider";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
-import lockfile from "proper-lockfile";
-import { setTimeout as sleep } from "timers/promises";
 import { getAgentDir } from "@miubot/shared/config";
 import { raceWithAbortSignal } from "@miubot/shared/utils/abort";
 import { getFileRevision, normalizePath } from "@miubot/shared/utils/paths";
 import { stripBom } from "@miubot/shared/utils/text";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { dirname, join } from "path";
+import lockfile from "proper-lockfile";
+import { setTimeout as sleep } from "timers/promises";
 import { isCommandConfigValue, resolveConfigValue } from "./resolve-config-value.ts";
 
 type AuthStorageData = Record<string, Credential>;

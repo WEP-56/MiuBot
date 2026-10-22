@@ -23,7 +23,10 @@ export async function collectInboundStickers(
 			const fileName = `${sourceName.slice(0, sourceName.length - extname(sourceName).length) || "collected-sticker"}${extension}`;
 			const imported = await store.importFile(fileName, bytes);
 			if (imported.duplicate) result.duplicates++;
-			else { result.imported++; result.stickerIds.push(imported.sticker.id); }
+			else {
+				result.imported++;
+				result.stickerIds.push(imported.sticker.id);
+			}
 		} catch {
 			result.failed++;
 		}

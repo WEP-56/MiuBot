@@ -1,8 +1,5 @@
 import { constants, copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { basename, join, parse, resolve } from "node:path";
-import { resolvePath } from "@miubot/shared/utils/paths";
-import type { AgentSession } from "./agent-session.ts";
-import type { AgentSessionRuntimeDiagnostic, AgentSessionServices } from "./agent-session-services.ts";
 import type {
 	ProjectTrustContext,
 	ReplacedSessionContext,
@@ -10,6 +7,9 @@ import type {
 	SessionStartEvent,
 } from "@miubot/plugin/extensions/index";
 import { emitSessionShutdownEvent } from "@miubot/plugin/extensions/runner";
+import { resolvePath } from "@miubot/shared/utils/paths";
+import type { AgentSession } from "./agent-session.ts";
+import type { AgentSessionRuntimeDiagnostic, AgentSessionServices } from "./agent-session-services.ts";
 import type { CreateAgentSessionResult } from "./sdk.ts";
 import { assertSessionCwdExists } from "./session-cwd.ts";
 import { SessionManager } from "./session-manager.ts";

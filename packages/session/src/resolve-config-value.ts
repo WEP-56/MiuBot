@@ -3,8 +3,8 @@
  * Used by auth-storage.ts and model-registry.ts.
  */
 
-import { execSync, spawnSync } from "child_process";
 import { getShellConfig } from "@miubot/shared/utils/shell";
+import { execSync, spawnSync } from "child_process";
 
 // Cache for shell command results (persists for process lifetime)
 const commandResultCache = new Map<string, string | undefined>();

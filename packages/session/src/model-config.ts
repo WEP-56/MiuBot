@@ -9,12 +9,12 @@ import {
 	ModelPromptCacheSchema,
 	ThinkingLevelMapSchema,
 } from "@miubot/provider/providers/model-schema";
-import { type Static, Type } from "typebox";
-import { Compile } from "typebox/compile";
-import type { TLocalizedValidationError } from "typebox/error";
 import { stripJsonComments } from "@miubot/shared/utils/json";
 import { normalizePath } from "@miubot/shared/utils/paths";
 import { stripBom } from "@miubot/shared/utils/text";
+import { type Static, Type } from "typebox";
+import { Compile } from "typebox/compile";
+import type { TLocalizedValidationError } from "typebox/error";
 
 const SamplingParamsSchema = Type.Record(Type.String(), Type.Unknown());
 const SamplingParamsByThinkingLevelSchema = Type.Object(

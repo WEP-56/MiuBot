@@ -2,8 +2,6 @@ import { constants } from "node:fs";
 import { access as fsAccess } from "node:fs/promises";
 import { constants as osConstants } from "node:os";
 import type { AgentTool } from "@miubot/agent";
-import { spawn } from "child_process";
-import { type Static, Type } from "typebox";
 import { waitForChildProcess } from "@miubot/shared/utils/child-process";
 import {
 	getShellConfig,
@@ -13,6 +11,8 @@ import {
 	trackDetachedChildPid,
 	untrackDetachedChildPid,
 } from "@miubot/shared/utils/shell";
+import { spawn } from "child_process";
+import { type Static, Type } from "typebox";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -411,7 +411,6 @@ export function createShellToolDefinition(
 		},
 	};
 }
-
 
 const BASH_UPDATE_THROTTLE_MS = 100;
 

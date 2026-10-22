@@ -1,5 +1,25 @@
 import { join } from "node:path";
 import { Agent, type AgentMessage, setDefaultStreamFn, type ThinkingLevel } from "@miubot/agent";
+import { convertToLlm } from "@miubot/context/messages";
+import type {
+	ExtensionRunner,
+	LoadExtensionsResult,
+	SessionStartEvent,
+	ToolDefinition,
+} from "@miubot/plugin/extensions/index";
+import {
+	createBashTool,
+	createCodingTools,
+	createEditTool,
+	createFindTool,
+	createGrepTool,
+	createLsTool,
+	createPowerShellTool,
+	createReadOnlyTools,
+	createReadTool,
+	createWriteTool,
+	withFileMutationQueue,
+} from "@miubot/plugin/tools/index";
 import type { ModelsSimpleStreamOptions } from "@miubot/provider";
 import { clampThinkingLevel, type Message, type Model, streamSimple } from "@miubot/provider/compat";
 import { getAgentDir } from "@miubot/shared/config";
@@ -8,9 +28,7 @@ import { AgentSession } from "./agent-session.ts";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.ts";
 import { CacheWarmer } from "./cache-warmer.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
-import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "@miubot/plugin/extensions/index";
 import { createToolNameMatcher } from "./mcp-servers.ts";
-import { convertToLlm } from "@miubot/context/messages";
 import { findInitialModel } from "./model-resolver.ts";
 import { ModelRuntime } from "./model-runtime.ts";
 import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
@@ -25,19 +43,6 @@ import {
 	SettingsManager,
 } from "./settings-manager.ts";
 import { time } from "./timings.ts";
-import {
-	createBashTool,
-	createCodingTools,
-	createEditTool,
-	createFindTool,
-	createGrepTool,
-	createLsTool,
-	createPowerShellTool,
-	createReadOnlyTools,
-	createReadTool,
-	createWriteTool,
-	withFileMutationQueue,
-} from "@miubot/plugin/tools/index";
 import { getBranchSelection } from "./virtual-models.ts";
 
 // Preserve the pre-0.81 fallback for extensions that construct Agent instances
@@ -117,7 +122,8 @@ export interface CreateAgentSessionResult {
 
 // Re-exports
 
-export * from "./agent-session-runtime.ts";
+export type { PromptTemplate } from "@miubot/context/prompt-templates";
+export type { Skill } from "@miubot/context/skills";
 export type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -128,9 +134,8 @@ export type {
 	SlashCommandSource,
 	ToolDefinition,
 } from "@miubot/plugin/extensions/index";
-export type { PromptTemplate } from "@miubot/context/prompt-templates";
-export type { Skill } from "@miubot/context/skills";
 export type { Tool } from "@miubot/plugin/tools/index";
+export * from "./agent-session-runtime.ts";
 
 export {
 	withFileMutationQueue,

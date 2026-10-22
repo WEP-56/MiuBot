@@ -1,6 +1,6 @@
+import { McpClient, StdioTransport, StreamableHttpTransport, type Tool, toLlmContent } from "@miubot/mcp";
 import { Type } from "typebox";
 import type { ToolDefinition } from "../../extensions/index.ts";
-import { McpClient, StdioTransport, StreamableHttpTransport, toLlmContent, type Tool } from "@miubot/mcp";
 
 export interface McpServerConfig {
 	id: string;
@@ -43,7 +43,9 @@ export class McpRuntime {
 	}
 
 	async startEnabled(): Promise<void> {
-		await Promise.all([...this.servers.values()].filter((server) => server.config.enabled).map((server) => this.connect(server)));
+		await Promise.all(
+			[...this.servers.values()].filter((server) => server.config.enabled).map((server) => this.connect(server)),
+		);
 	}
 
 	setGlobalToolsEnabled(enabled: boolean): void {
@@ -88,9 +90,10 @@ export class McpRuntime {
 		let client: McpClient | undefined;
 		try {
 			client = new McpClient({ name: "miubot", version: "0.1.0" });
-			const transport = server.config.transport === "stdio"
-				? new StdioTransport({ command: server.config.command ?? "", args: server.config.args ?? [] })
-				: new StreamableHttpTransport({ url: server.config.url ?? "" });
+			const transport =
+				server.config.transport === "stdio"
+					? new StdioTransport({ command: server.config.command ?? "", args: server.config.args ?? [] })
+					: new StreamableHttpTransport({ url: server.config.url ?? "" });
 			await client.connect(transport);
 			server.tools = await client.listTools();
 			server.client = client;
@@ -119,22 +122,48 @@ export class McpRuntime {
 			description: tool.description ?? `MCP tool ${tool.name} from ${server.config.name}`,
 			promptSnippet: `MCP ${server.config.name}: ${tool.title ?? tool.name}`,
 			parameters: Type.Unsafe<Record<string, unknown>>(tool.inputSchema),
-			namespace: { name: `mcp__${server.config.id}`, aliases: [server.config.name], description: `Tools from MCP server ${server.config.name}` },
-			annotations: tool.annotations ? {
-				...(tool.annotations.readOnlyHint === undefined ? {} : { readOnlyHint: tool.annotations.readOnlyHint }),
-				...(tool.annotations.destructiveHint === undefined ? {} : { destructiveHint: tool.annotations.destructiveHint }),
-				...(tool.annotations.idempotentHint === undefined ? {} : { idempotentHint: tool.annotations.idempotentHint }),
-				...(tool.annotations.openWorldHint === undefined ? {} : { openWorldHint: tool.annotations.openWorldHint }),
-			} : undefined,
+			namespace: {
+				name: `mcp__${server.config.id}`,
+				aliases: [server.config.name],
+				description: `Tools from MCP server ${server.config.name}`,
+			},
+			annotations: tool.annotations
+				? {
+						...(tool.annotations.readOnlyHint === undefined
+							? {}
+							: { readOnlyHint: tool.annotations.readOnlyHint }),
+						...(tool.annotations.destructiveHint === undefined
+							? {}
+							: { destructiveHint: tool.annotations.destructiveHint }),
+						...(tool.annotations.idempotentHint === undefined
+							? {}
+							: { idempotentHint: tool.annotations.idempotentHint }),
+						...(tool.annotations.openWorldHint === undefined
+							? {}
+							: { openWorldHint: tool.annotations.openWorldHint }),
+					}
+				: undefined,
 			async execute(_id, params, signal) {
 				if (!client || server.client !== client || server.state !== "connected") {
-					return { content: [{ type: "text", text: `MCP server ${server.config.name} is disconnected.` }], details: {}, isError: true };
+					return {
+						content: [{ type: "text", text: `MCP server ${server.config.name} is disconnected.` }],
+						details: {},
+						isError: true,
+					};
 				}
 				try {
 					const result = await client.callTool(tool.name, params as Record<string, unknown>, { signal });
-					return { content: toLlmContent(result), details: result.structuredContent ?? {}, isError: result.isError };
+					return {
+						content: toLlmContent(result),
+						details: result.structuredContent ?? {},
+						isError: result.isError,
+					};
 				} catch (error) {
-					return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], details: {}, isError: true };
+					return {
+						content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
+						details: {},
+						isError: true,
+					};
 				}
 			},
 		};

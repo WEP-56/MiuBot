@@ -3,6 +3,13 @@
  */
 
 import type { AgentMessage, AgentTool } from "@miubot/agent";
+import type { ResourceDiagnostic } from "@miubot/context/diagnostics";
+import {
+	type BuildSystemPromptOptions,
+	buildSystemPrompt,
+	type NormalizedBuildSystemPromptOptions,
+	normalizeBuildSystemPromptOptions,
+} from "@miubot/context/system-prompt";
 import {
 	getCurrentSystemMessage,
 	type ImageContent,
@@ -10,21 +17,13 @@ import {
 	type Provider,
 	type ProviderHeaders,
 } from "@miubot/provider";
-import type { KeyId } from "@miubot/shared/terminal";
-import { type Theme, theme } from "@miubot/shared/terminal";
 import type { CacheWarmingAction } from "@miubot/session/cache-warmer";
-import type { ResourceDiagnostic } from "@miubot/context/diagnostics";
-import type { KeybindingsConfig } from "@miubot/shared/terminal";
 import type { ModelRegistry } from "@miubot/session/model-registry";
 import type { ScopedModel } from "@miubot/session/model-resolver";
 import type { SessionManager } from "@miubot/session/session-manager";
-import {
-	type BuildSystemPromptOptions,
-	buildSystemPrompt,
-	type NormalizedBuildSystemPromptOptions,
-	normalizeBuildSystemPromptOptions,
-} from "@miubot/context/system-prompt";
 import type { VirtualModelDefinition } from "@miubot/session/virtual-models";
+import type { KeybindingsConfig, KeyId } from "@miubot/shared/terminal";
+import { type Theme, theme } from "@miubot/shared/terminal";
 import type {
 	AgentBeforeSettleEvent,
 	BeforeAgentStartCustomEvent,

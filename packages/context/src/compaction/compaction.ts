@@ -24,7 +24,6 @@ import type {
 	Usage,
 } from "@miubot/provider/compat";
 import { completeSimple } from "@miubot/provider/compat";
-import { convertToLlm } from "../messages.ts";
 import {
 	buildSessionProjection,
 	type CompactionEntry,
@@ -33,6 +32,7 @@ import {
 	type SessionProjection,
 	sessionEntryToContextMessages,
 } from "@miubot/session/session-manager";
+import { convertToLlm } from "../messages.ts";
 import { combineUsage } from "../usage-totals.ts";
 import {
 	computeFileLists,

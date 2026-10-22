@@ -3,13 +3,7 @@
  */
 
 import type { ThinkingLevel } from "@miubot/agent";
-import {
-	type Api,
-	type AuthOperationOptions,
-	type KnownProvider,
-	type Model,
-	modelsAreEqual,
-} from "@miubot/provider";
+import { type Api, type AuthOperationOptions, type KnownProvider, type Model, modelsAreEqual } from "@miubot/provider";
 import chalk from "chalk";
 import { minimatch } from "minimatch";
 import { DEFAULT_THINKING_LEVEL, isValidThinkingLevel } from "./defaults.ts";

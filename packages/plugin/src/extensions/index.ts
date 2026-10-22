@@ -2,8 +2,8 @@
  * Extension system for lifecycle events and custom tools.
  */
 
-export type { SlashCommandInfo, SlashCommandSource } from "@miubot/session/slash-commands";
 export type { SourceInfo } from "@miubot/context/source-info";
+export type { SlashCommandInfo, SlashCommandSource } from "@miubot/session/slash-commands";
 export {
 	createExtensionRuntime,
 	discoverAndLoadExtensions,

@@ -2,34 +2,8 @@
  * Core modules shared between all run modes.
  */
 
-export {
-	AgentSession,
-	type AgentSessionConfig,
-	type AgentSessionEvent,
-	type AgentSessionEventListener,
-	type ModelCycleResult,
-	type PromptOptions,
-	type SessionStats,
-} from "./agent-session.ts";
-export {
-	AgentSessionRuntime,
-	type CreateAgentSessionRuntimeFactory,
-	type CreateAgentSessionRuntimeResult,
-	createAgentSessionRuntime,
-} from "./agent-session-runtime.ts";
-export {
-	type AgentSessionRuntimeDiagnostic,
-	type AgentSessionServices,
-	type CreateAgentSessionFromServicesOptions,
-	type CreateAgentSessionServicesOptions,
-	createAgentSessionFromServices,
-	createAgentSessionServices,
-} from "./agent-session-services.ts";
-export { type BashExecutorOptions, type BashResult, executeBashWithOperations } from "./bash-executor.ts";
-export type { CacheWarmingDecision, CacheWarmingStatus } from "./cache-warmer.ts";
 export type { CompactionResult } from "@miubot/context/compaction/index";
-export { createEventBus, type EventBus, type EventBusController } from "./event-bus.ts";
-export { areExperimentalFeaturesEnabled } from "./experimental.ts";
+export { createSyntheticSourceInfo } from "@miubot/context/source-info";
 // Extensions system
 export {
 	type AgentActivityOutcome,
@@ -94,4 +68,30 @@ export {
 	type TurnStartEvent,
 	type WorkingIndicatorOptions,
 } from "@miubot/plugin/extensions/index";
-export { createSyntheticSourceInfo } from "@miubot/context/source-info";
+export {
+	AgentSession,
+	type AgentSessionConfig,
+	type AgentSessionEvent,
+	type AgentSessionEventListener,
+	type ModelCycleResult,
+	type PromptOptions,
+	type SessionStats,
+} from "./agent-session.ts";
+export {
+	AgentSessionRuntime,
+	type CreateAgentSessionRuntimeFactory,
+	type CreateAgentSessionRuntimeResult,
+	createAgentSessionRuntime,
+} from "./agent-session-runtime.ts";
+export {
+	type AgentSessionRuntimeDiagnostic,
+	type AgentSessionServices,
+	type CreateAgentSessionFromServicesOptions,
+	type CreateAgentSessionServicesOptions,
+	createAgentSessionFromServices,
+	createAgentSessionServices,
+} from "./agent-session-services.ts";
+export { type BashExecutorOptions, type BashResult, executeBashWithOperations } from "./bash-executor.ts";
+export type { CacheWarmingDecision, CacheWarmingStatus } from "./cache-warmer.ts";
+export { createEventBus, type EventBus, type EventBusController } from "./event-bus.ts";
+export { areExperimentalFeaturesEnabled } from "./experimental.ts";

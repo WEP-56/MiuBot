@@ -1,16 +1,29 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { detectCapabilities, getTerminalColorMode, type TerminalColorMode } from "@miubot/shared/terminal";
-import chalk from "chalk";
-import { CONFIG_DIR_NAME } from "@miubot/shared/config";
-import { loadThemeFromPath, type Theme } from "@miubot/shared/terminal";
 import type { ResourceDiagnostic } from "@miubot/context/diagnostics";
+import { CONFIG_DIR_NAME } from "@miubot/shared/config";
+import {
+	detectCapabilities,
+	getTerminalColorMode,
+	loadThemeFromPath,
+	type TerminalColorMode,
+	type Theme,
+} from "@miubot/shared/terminal";
+import chalk from "chalk";
 
 export type { ResourceCollision, ResourceDiagnostic } from "@miubot/context/diagnostics";
 
-import { canonicalizePath, isLocalPath, resolvePath } from "@miubot/shared/utils/paths";
-import { stripBom } from "@miubot/shared/utils/text";
-import { createEventBus, type EventBus } from "./event-bus.ts";
+import type { PromptTemplate } from "@miubot/context/prompt-templates";
+import { loadPromptTemplates } from "@miubot/context/prompt-templates";
+import type { Skill } from "@miubot/context/skills";
+import { loadSkills } from "@miubot/context/skills";
+import {
+	BUILTIN_PATH_PREFIX,
+	createSourceInfo,
+	getSyntheticPathSource,
+	isSyntheticPath,
+	type SourceInfo,
+} from "@miubot/context/source-info";
 import {
 	clearExtensionCache,
 	createExtensionRuntime,
@@ -24,20 +37,12 @@ import type {
 	InlineExtension,
 	LoadExtensionsResult,
 } from "@miubot/plugin/extensions/types";
+import { canonicalizePath, isLocalPath, resolvePath } from "@miubot/shared/utils/paths";
+import { stripBom } from "@miubot/shared/utils/text";
+import { createEventBus, type EventBus } from "./event-bus.ts";
 import { findGitPaths } from "./footer-data-provider.ts";
 import { DefaultPackageManager, type PathMetadata, type ResolvedResource } from "./package-manager.ts";
-import type { PromptTemplate } from "@miubot/context/prompt-templates";
-import { loadPromptTemplates } from "@miubot/context/prompt-templates";
 import { SettingsManager } from "./settings-manager.ts";
-import type { Skill } from "@miubot/context/skills";
-import { loadSkills } from "@miubot/context/skills";
-import {
-	BUILTIN_PATH_PREFIX,
-	createSourceInfo,
-	getSyntheticPathSource,
-	isSyntheticPath,
-	type SourceInfo,
-} from "@miubot/context/source-info";
 import { resetTimings } from "./timings.ts";
 
 export interface ResourceExtensionPaths {
@@ -1066,7 +1071,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 				if (stats.isDirectory()) {
 					this.loadThemesFromDir(resolved, themes, diagnostics, colorMode);
 				} else if (stats.isFile() && resolved.endsWith(".json")) {
-					this.loadThemeFromFile(resolved, themes, diagnostics, colorMode);
+					this.loadThemeFromFile(resolved, themes, colorMode);
 				} else {
 					diagnostics.push({ type: "warning", message: "theme path is not a json file", path: resolved });
 				}
@@ -1106,7 +1111,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 				if (!entry.name.endsWith(".json")) {
 					continue;
 				}
-				this.loadThemeFromFile(join(dir, entry.name), themes, diagnostics, colorMode);
+				this.loadThemeFromFile(join(dir, entry.name), themes, colorMode);
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : "failed to read theme directory";
@@ -1114,12 +1119,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		}
 	}
 
-	private loadThemeFromFile(
-		filePath: string,
-		themes: Theme[],
-		diagnostics: ResourceDiagnostic[],
-		colorMode: TerminalColorMode,
-	): void {
+	private loadThemeFromFile(filePath: string, themes: Theme[], colorMode: TerminalColorMode): void {
 		const loaded = loadThemeFromPath(filePath, colorMode);
 		if (loaded) themes.push(loaded);
 	}

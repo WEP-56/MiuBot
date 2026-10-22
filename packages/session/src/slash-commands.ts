@@ -1,5 +1,5 @@
-import { APP_NAME } from "@miubot/shared/config";
 import type { SourceInfo } from "@miubot/context/source-info";
+import { APP_NAME } from "@miubot/shared/config";
 
 export type SlashCommandSource = "extension" | "prompt" | "skill";
 

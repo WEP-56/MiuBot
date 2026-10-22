@@ -15,8 +15,8 @@ import type {
 	AgentToolResult,
 	AgentToolUpdateCallback,
 } from "@miubot/agent";
-import type { JsonObject, NestedToolCallRecord, NestedToolCalls, TextContent, Usage } from "@miubot/provider";
 import { combineUsage } from "@miubot/context/usage-totals";
+import type { JsonObject, NestedToolCallRecord, NestedToolCalls, TextContent, Usage } from "@miubot/provider";
 
 /**
  * Limits of the nested-call record on a tool result: arguments

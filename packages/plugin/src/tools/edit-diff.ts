@@ -2,10 +2,10 @@
  * Shared diff computation utilities for the edit and similar tools.
  */
 
+import { splitBom } from "@miubot/shared/utils/text";
 import * as Diff from "diff";
 import { constants } from "fs";
 import { access, readFile } from "fs/promises";
-import { splitBom } from "@miubot/shared/utils/text";
 import { resolveToCwd } from "./path-utils.ts";
 
 export function detectLineEnding(content: string): "\r\n" | "\n" {

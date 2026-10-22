@@ -9,13 +9,13 @@ import type { AgentMessage, StreamFn } from "@miubot/agent";
 import type { RetryCallbacks, RetryPolicy } from "@miubot/provider";
 import { contentText, normalizeContext } from "@miubot/provider";
 import type { Model, SimpleStreamOptions, Usage } from "@miubot/provider/compat";
+import type { ReadonlySessionManager, SessionEntry } from "@miubot/session/session-manager";
 import {
 	convertToLlm,
 	createBranchSummaryMessage,
 	createCompactionSummaryMessage,
 	createCustomMessage,
 } from "../messages.ts";
-import type { ReadonlySessionManager, SessionEntry } from "@miubot/session/session-manager";
 import { completeSummarization, estimateTokens, getSummarizationFailure } from "./compaction.ts";
 import {
 	computeFileLists,

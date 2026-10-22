@@ -7,11 +7,11 @@
  */
 
 import type { WriteStream } from "node:fs";
+import type { BashOperations } from "@miubot/plugin/tools/bash";
+import { DEFAULT_MAX_BYTES, truncateTail } from "@miubot/plugin/tools/truncate";
 import { splitIncompleteAnsiSuffix, stripAnsi } from "@miubot/shared/utils/ansi";
 import { createOutputFileStream } from "@miubot/shared/utils/output-files";
 import { sanitizeBinaryOutput } from "@miubot/shared/utils/shell";
-import type { BashOperations } from "@miubot/plugin/tools/bash";
-import { DEFAULT_MAX_BYTES, truncateTail } from "@miubot/plugin/tools/truncate";
 
 // ============================================================================
 // Types

@@ -1,13 +1,13 @@
 import type { ThinkingLevel } from "@miubot/agent";
 import type { Model } from "@miubot/provider";
+import { CONFIG_DIR_NAME, getAgentDir } from "@miubot/shared/config";
 import type { ScrollViewScrollbar, TerminalCapabilities, WheelScrollLines } from "@miubot/shared/terminal";
+import { normalizePath, resolvePath } from "@miubot/shared/utils/paths";
+import { stripBom } from "@miubot/shared/utils/text";
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
-import { CONFIG_DIR_NAME, getAgentDir } from "@miubot/shared/config";
-import { normalizePath, resolvePath } from "@miubot/shared/utils/paths";
-import { stripBom } from "@miubot/shared/utils/text";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import { SETTINGS_DEFAULTS } from "./settings-defaults.ts";
 import type {

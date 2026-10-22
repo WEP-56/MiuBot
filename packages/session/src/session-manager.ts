@@ -1,5 +1,12 @@
 import type { AgentMessage } from "@miubot/agent";
 import {
+	type BashExecutionMessage,
+	type CustomMessage,
+	createBranchSummaryMessage,
+	createCompactionSummaryMessage,
+	createCustomMessage,
+} from "@miubot/context/messages";
+import {
 	type AssistantMessage,
 	getCurrentSystemMessage,
 	type ImageContent,
@@ -11,6 +18,8 @@ import {
 	type UserMessage,
 	uuidv7,
 } from "@miubot/provider";
+import { APP_NAME, getAgentDir as getDefaultAgentDir, getSessionsDir } from "@miubot/shared/config";
+import { normalizePath, resolvePath } from "@miubot/shared/utils/paths";
 import { randomUUID } from "crypto";
 import {
 	appendFileSync,
@@ -29,15 +38,6 @@ import { readdir, stat } from "fs/promises";
 import { basename, join, resolve } from "path";
 import { createInterface } from "readline";
 import { StringDecoder } from "string_decoder";
-import { APP_NAME, getAgentDir as getDefaultAgentDir, getSessionsDir } from "@miubot/shared/config";
-import { normalizePath, resolvePath } from "@miubot/shared/utils/paths";
-import {
-	type BashExecutionMessage,
-	type CustomMessage,
-	createBranchSummaryMessage,
-	createCompactionSummaryMessage,
-	createCustomMessage,
-} from "@miubot/context/messages";
 export const CURRENT_SESSION_VERSION = 3;
 
 export interface SessionHeader {

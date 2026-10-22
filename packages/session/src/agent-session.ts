@@ -31,39 +31,6 @@ import {
 	runToolCall,
 	type ThinkingLevel,
 } from "@miubot/agent";
-import { contentText, getCurrentSystemMessage, retryDelayMs } from "@miubot/provider";
-import type {
-	AssistantMessage,
-	AuthResult,
-	ImageContent,
-	Model,
-	ProviderHeaders,
-	SystemMessage,
-	TextContent,
-	ToolResultMessage,
-	Usage,
-} from "@miubot/provider/compat";
-import {
-	clampThinkingLevel,
-	cleanupSessionResources,
-	getSupportedThinkingLevels,
-	isContextOverflow,
-	isRecoverableLength,
-	isRetryableAssistantError,
-	modelsAreEqual,
-	type RetryCallbacks,
-	resetApiProviders,
-	streamSimple,
-} from "@miubot/provider/compat";
-import { getThemeByName, theme } from "@miubot/shared/terminal";
-import { stripFrontmatter } from "@miubot/shared/utils/frontmatter";
-import { processImage } from "@miubot/shared/utils/image-process";
-import { sleep } from "@miubot/shared/utils/sleep";
-import { normalizeToolResultImages } from "@miubot/shared/utils/tool-result-images";
-import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
-import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
-import { generateBugReportSummary } from "./bug-report.ts";
-import type { CacheWarmer, CacheWarmingStatus } from "./cache-warmer.ts";
 import {
 	type CompactionPreparation,
 	type CompactionResult,
@@ -77,7 +44,22 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "@miubot/context/compaction/index";
-import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./defaults.ts";
+import { type BashExecutionMessage, type CustomMessage, convertToLlm } from "@miubot/context/messages";
+import { expandPromptTemplate, type PromptTemplate } from "@miubot/context/prompt-templates";
+import {
+	BUILTIN_PATH_PREFIX,
+	createSyntheticSourceInfo,
+	isSyntheticPath,
+	type SourceInfo,
+} from "@miubot/context/source-info";
+import {
+	buildSystemPrompt,
+	buildSystemPromptSections,
+	diffSystemPromptSections,
+	type NormalizedBuildSystemPromptOptions,
+	normalizeBuildSystemPromptOptions,
+} from "@miubot/context/system-prompt";
+import { addUsageToTotals, combineUsage, createUsageTotals } from "@miubot/context/usage-totals";
 import {
 	type AgentActivityOutcome,
 	type BoundaryContextPreview,
@@ -111,12 +93,46 @@ import {
 	wrapRegisteredTools,
 } from "@miubot/plugin/extensions/index";
 import { type BeforeAgentStartTrigger, emitSessionShutdownEvent } from "@miubot/plugin/extensions/runner";
+import { type BashOperations, createLocalBashOperations } from "@miubot/plugin/tools/bash";
+import { createAllToolDefinitions } from "@miubot/plugin/tools/index";
+import { createToolDefinitionFromAgentTool } from "@miubot/plugin/tools/tool-definition-wrapper";
+import { contentText, getCurrentSystemMessage, retryDelayMs } from "@miubot/provider";
+import type {
+	AssistantMessage,
+	AuthResult,
+	ImageContent,
+	Model,
+	ProviderHeaders,
+	SystemMessage,
+	TextContent,
+	ToolResultMessage,
+	Usage,
+} from "@miubot/provider/compat";
+import {
+	clampThinkingLevel,
+	cleanupSessionResources,
+	getSupportedThinkingLevels,
+	isContextOverflow,
+	isRecoverableLength,
+	isRetryableAssistantError,
+	modelsAreEqual,
+	type RetryCallbacks,
+	resetApiProviders,
+	streamSimple,
+} from "@miubot/provider/compat";
+import { stripFrontmatter } from "@miubot/shared/utils/frontmatter";
+import { processImage } from "@miubot/shared/utils/image-process";
+import { sleep } from "@miubot/shared/utils/sleep";
+import { normalizeToolResultImages } from "@miubot/shared/utils/tool-result-images";
+import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
+import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
+import { generateBugReportSummary } from "./bug-report.ts";
+import type { CacheWarmer, CacheWarmingStatus } from "./cache-warmer.ts";
+import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./defaults.ts";
 import { createToolNameMatcher, isMcpToolName } from "./mcp-servers.ts";
-import { type BashExecutionMessage, type CustomMessage, convertToLlm } from "@miubot/context/messages";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { NestedToolCallRunner } from "./nested-tool-calls.ts";
-import { expandPromptTemplate, type PromptTemplate } from "@miubot/context/prompt-templates";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import { exportSessionToJsonl } from "./session-export.ts";
 import {
@@ -135,18 +151,6 @@ import {
 	type SettingsManager,
 } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
-import { BUILTIN_PATH_PREFIX, createSyntheticSourceInfo, isSyntheticPath, type SourceInfo } from "@miubot/context/source-info";
-import {
-	buildSystemPrompt,
-	buildSystemPromptSections,
-	diffSystemPromptSections,
-	type NormalizedBuildSystemPromptOptions,
-	normalizeBuildSystemPromptOptions,
-} from "@miubot/context/system-prompt";
-import { type BashOperations, createLocalBashOperations } from "@miubot/plugin/tools/bash";
-import { createAllToolDefinitions } from "@miubot/plugin/tools/index";
-import { createToolDefinitionFromAgentTool } from "@miubot/plugin/tools/tool-definition-wrapper";
-import { addUsageToTotals, combineUsage, createUsageTotals } from "@miubot/context/usage-totals";
 import {
 	findLatestResponse,
 	getBranchSelection,
