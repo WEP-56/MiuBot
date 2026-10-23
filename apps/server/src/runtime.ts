@@ -64,6 +64,14 @@ export type ToolSettings = {
 	stickerTaggerProviderId: string;
 	stickerTaggerModelId: string;
 	webSearch: { provider: WebSearchProvider; apiKeys: Record<WebSearchProvider, string> };
+	/**
+	 * `image_gen` 用哪个图像提供商。
+	 *
+	 * 图像提供商是**这个工具的依赖**，不是 Agent 的推理后端——所以它的选择放在工具配置里，
+	 * 与 `webSearch.provider` 同层。空字符串 = 未选择，`image_gen` 直接不可用；
+	 * 以前那种「挑第一个启用且有 Key 的」会让「换了提供商却没生效」变得无法解释。
+	 */
+	imageGen: { providerId: string };
 };
 export type ProactiveGateSettings = {
 	enabled: boolean;
@@ -92,6 +100,16 @@ export type PluginSettings = {
 	/** 黑名单：始终优先于白名单。 */
 	disabled: string[];
 };
+/**
+ * 斜杠命令配置。
+ *
+ * `disabled` 与插件白名单同一个取向：留空表示全部启用。命令是「已经装在代码里的入口」，
+ * 默认全关会让人以为命令坏了；要收口就显式列出来。
+ */
+export type CommandSettings = {
+	/** 被禁用的命令名（不含前导斜杠）。 */
+	disabled: string[];
+};
 export type AppConfig = {
 	qqBots: QqBotConfig[];
 	providers: ProviderConfig[];
@@ -103,6 +121,14 @@ export type AppConfig = {
 	mcpServers: McpServerConfig[];
 	proactiveGate: ProactiveGateSettings;
 	plugins: PluginSettings;
+	/**
+	 * 管理员名单：QQ 用户 openid。**空 = 没有人能执行管理员命令**（安全默认）。
+	 *
+	 * 不用 `config.access.allowedPeers` 兼任：那是「谁能用这个 Bot」，这里是「谁能让 Bot
+	 * 做管理动作」，两件事的授权范围差一个数量级，混在一起会让一次白名单调整顺带提权。
+	 */
+	admins: string[];
+	commands: CommandSettings;
 };
 export type ChatMessage = { role: "user" | "assistant" | "system"; content: string };
 
@@ -164,6 +190,7 @@ export function createDefaultConfig(): AppConfig {
 			stickerTaggerProviderId: "",
 			stickerTaggerModelId: "",
 			webSearch: { provider: "tavily", apiKeys: { tavily: "", brave: "", exa: "", serper: "" } },
+			imageGen: { providerId: "" },
 		},
 		mcpServers: [],
 		access: { allowedPeers: [] },
@@ -181,6 +208,8 @@ export function createDefaultConfig(): AppConfig {
 			judgeModelId: "",
 		},
 		plugins: { enabled: [], disabled: [] },
+		admins: [],
+		commands: { disabled: [] },
 	};
 }
 

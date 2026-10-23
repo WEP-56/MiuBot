@@ -1,6 +1,9 @@
 import type { QQBot, QQBotInboundMessage } from "@tencent-connect/qqbot-nodejs";
 import type { AgentHost, PeerConfig } from "../agent-host.ts";
+import { type PromptWithFallbackResult, promptWithFallback } from "../agent-prompt.ts";
 import type { AppState } from "../app-state.ts";
+import type { CommandDispatcher, CommandRegistry } from "../commands/index.ts";
+import { parseCommand } from "../commands/index.ts";
 import type { LogLevel } from "../logging.ts";
 import { downloadImage, prepareInboundMedia } from "../media.ts";
 import { peerKey } from "../peer-key.ts";
@@ -19,7 +22,7 @@ import { enqueueForTarget } from "../target-queue.ts";
 export type InboundHandler = (bot: QQBot, botConfig: QqBotConfig, message: QQBotInboundMessage) => Promise<void>;
 
 /**
- * QQ 入站消息主流程：去重 → 归一化 → 平台事件 → 素材采集 → 插话聚合 / Agent 回复。
+ * QQ 入站消息主流程：去重 → 归一化 → 平台事件 → 斜杠命令 / 素材采集 → 插话聚合 / Agent 回复。
  *
  * 同一对象的回复通过 `enqueueForTarget` 串行；私聊走 C2C 流式输出，群聊回退普通文本。
  */
@@ -31,11 +34,26 @@ export function createInboundHandler(deps: {
 	proactive: ProactiveRuntime;
 	inboundReferences: ReturnType<typeof createInboundReferenceStore>;
 	stickerStore: StickerStore;
+	/** 斜杠命令注册表：只回答「这个命令存在吗、被禁用了没有」。 */
+	commandRegistry: CommandRegistry;
+	/** 命令分发：权限校验与执行。 */
+	commandDispatcher: CommandDispatcher;
 	/** 生效的入站白名单（`MIUBOT_ALLOWED_PEERS` 优先于配置）；空 = 不限制。 */
 	allowedPeers(): string[];
 	log(level: LogLevel, text: string, sessionId?: string): void;
 }): InboundHandler {
-	const { state, agentHost, platform, stickerTagging, proactive, inboundReferences, stickerStore, log } = deps;
+	const {
+		state,
+		agentHost,
+		platform,
+		stickerTagging,
+		proactive,
+		inboundReferences,
+		stickerStore,
+		commandRegistry,
+		commandDispatcher,
+		log,
+	} = deps;
 
 	return async function processQQMessage(
 		bot: QQBot,
@@ -88,6 +106,50 @@ export function createInboundHandler(deps: {
 				message.replyTarget.msgId,
 			);
 		}
+		/**
+		 * 斜杠命令。
+		 *
+		 * 位置很关键：在去重与白名单之后、群聊插话闸门之前。群里不 @ 机器人也能用命令，
+		 * 而只有**已注册**的命令会被接管——其余以 `/` 开头的普通聊天仍走插话，否则会误吞
+		 * 群友的消息。命中即接管：不进插话窗口、不进 Agent、不写入会话上下文。
+		 *
+		 * 带附件的消息不当命令处理：命令没法消费附件，接管就等于把附件静默丢掉。
+		 */
+		const parsedCommand = hasAttachments ? undefined : parseCommand(text);
+		const resolvedCommand = parsedCommand
+			? commandRegistry.resolve(parsedCommand.name, { botId: botConfig.id })
+			: undefined;
+		if (parsedCommand && resolvedCommand) {
+			const isAdmin = state.getConfig().admins.includes(senderId);
+			const senderName = normalized.senderName || senderId;
+			// 命令是一次明确的交互：撤销待发的插话窗口，否则 Bot 会在执行完命令后再插一句。
+			if (isGroup) proactive.cancelPendingWindow(botConfig.id, peerId);
+			// 与普通回复同一条串行队列：命令可能压缩或重建会话，不能和正在跑的 Agent 抢。
+			const next = enqueueForTarget(`${botConfig.id}:${isGroup ? "group" : "c2c"}:${peerId}`, () =>
+				commandDispatcher({
+					parsed: parsedCommand,
+					resolved: resolvedCommand,
+					bot,
+					botConfig,
+					message,
+					channel: platform.channelFor(bot),
+					peer: peerConfig,
+					isGroup,
+					senderId,
+					senderName,
+					isAdmin,
+					commands: commandRegistry.available(isAdmin),
+				}),
+			);
+			await next.catch(async (error: unknown) => {
+				log("ERROR", `命令处理异常：${error instanceof Error ? error.message : String(error)}`);
+				platform.inboundDeduper.forget(accepted.dedupKey);
+				try {
+					await platform.channelFor(bot).sendText(message.replyTarget, "处理命令时发生错误，请稍后重试。");
+				} catch {}
+			});
+			return;
+		}
 		const tools = state.getConfig().tools;
 		const collectProbability =
 			tools.stickersEnabled && peerConfig.useTools !== false ? tools.stickerAutoCollectProbability : 0;
@@ -139,36 +201,12 @@ export function createInboundHandler(deps: {
 						item.scope === (isGroup ? "group" : "c2c") &&
 						item.peerId === peerId,
 				);
-			if (text === "/new" && !hasAttachments) {
-				session = state.createSession(isGroup ? "group" : "c2c", peerId, peerName, botConfig.id);
-				await state.saveSessions();
-				log("INFO", `创建新会话：${peerName} (${isGroup ? "群聊" : "私聊"})`, session.id);
-				await channel.sendText(message.replyTarget, "已开始新会话。");
-				return;
-			}
 			if (!session) {
 				session = state.createSession(isGroup ? "group" : "c2c", peerId, peerName, botConfig.id);
 				await state.saveSessions();
 				log("INFO", `首次消息创建会话：${peerName} (${isGroup ? "群聊" : "私聊"})`, session.id);
 			}
 			agentHost.applyPeerConfigToSession(session, peerConfig);
-			if (text === "/compact" && !hasAttachments) {
-				if (session.messages.length < 2) {
-					await channel.sendText(message.replyTarget, "当前会话内容较少，暂时不需要压缩。");
-					return;
-				}
-				const agentSession = await agentHost.getAgentSession(session);
-				const compacted = await agentSession.compact(
-					"Summarize the conversation, preserving facts, preferences, decisions, and unfinished tasks.",
-				);
-				session.summary = compacted.summary;
-				session.compactedThrough = Math.max(0, session.messages.length - 4);
-				session.updatedAt = new Date().toISOString();
-				await state.saveSessions();
-				log("INFO", "上下文已压缩", session.id);
-				await channel.sendText(message.replyTarget, "上下文压缩完成。");
-				return;
-			}
 			const agentSession = await agentHost.getAgentSession(session);
 			const config = state.getConfig();
 			const provider = config.providers.find((item) => item.id === session.providerId);
@@ -207,15 +245,37 @@ export function createInboundHandler(deps: {
 			// 私聊走 C2C 流式输出（QQ 只在 C2C 开放 stream_messages）；群聊回退为普通文本。
 			const stream = channel.openStream(message.replyTarget);
 			let streamedText = "";
+			/**
+			 * 失败一次后流式通道已经取消。
+			 *
+			 * QQ 的 stream 绑定在 msgId 上，重开是否可用没有保证，所以重试成功后统一退化为
+			 * 普通文本发送（见 HANDOFF §五.9）。这样也不会出现「群里留半句、后面又整段重发」。
+			 */
+			let streamUsable = stream.supported;
 			const unsubscribeStream = stream.supported
 				? agentSession.subscribe((event) => {
+						if (!streamUsable) return;
 						if (event.type !== "message_update" || event.assistantMessageEvent.type !== "text_delta") return;
 						streamedText += event.assistantMessageEvent.delta;
 						void stream.update(streamedText).catch(() => {});
 					})
 				: () => {};
+			let outcome: PromptWithFallbackResult;
 			try {
-				await agentSession.prompt(prompt, { images: media.images });
+				outcome = await promptWithFallback({
+					agentSession,
+					prompt,
+					images: media.images,
+					fallbackModel: await agentHost.getFallbackModel(peerConfig),
+					sessionId: session.id,
+					log,
+					onFailure: () => {
+						// 半截流式内容不能留在群里：取消并清空，成功后再整段重发。
+						streamUsable = false;
+						stream.cancel();
+						streamedText = "";
+					},
+				});
 			} catch (error) {
 				const detail = error instanceof Error ? error.message : String(error);
 				log("ERROR", `Agent 执行失败：${detail}`, session.id);
@@ -233,13 +293,20 @@ export function createInboundHandler(deps: {
 			}
 			const answer = agentSession.getLastAssistantText() ?? "";
 			session.messages.push({ role: "assistant", content: answer, timestamp: new Date().toISOString() });
+			// 记下真正回答的模型：工作台据此看出「这条是备用模型答的」。
+			session.lastModelUsed = outcome.modelUsed;
+			if (outcome.usedFallback) session.lastFallbackAt = new Date().toISOString();
 			if (session.title === "新会话") session.title = (text || "图片消息").slice(0, 36);
 			session.updatedAt = new Date().toISOString();
 			await state.saveSessions();
-			log("INFO", `Agent 回复完成：${agentSession.model?.provider}/${agentSession.model?.id}`, session.id);
+			log(
+				"INFO",
+				`Agent 回复完成：${outcome.modelUsed}${outcome.usedFallback ? "（本轮用过备用模型）" : ""}`,
+				session.id,
+			);
 			if (answer) {
 				let streamCompleted = false;
-				if (stream.supported && streamedText.trim()) {
+				if (streamUsable && streamedText.trim()) {
 					try {
 						await stream.complete();
 						streamCompleted = true;

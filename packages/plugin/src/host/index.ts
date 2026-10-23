@@ -1,4 +1,15 @@
 export {
+	createPluginCommandRegistry,
+	type PluginCommandContext,
+	type PluginCommandDefinition,
+	type PluginCommandInvocation,
+	type PluginCommandPermission,
+	type PluginCommandRegistration,
+	type PluginCommandRegistry,
+	type PluginCommandRegistryDependencies,
+	validatePluginCommand,
+} from "./commands.ts";
+export {
 	type ConfigIssue,
 	compactAgainstDefaults,
 	configuredSecretKeys,
@@ -20,6 +31,7 @@ export {
 export {
 	allowsBot,
 	createPluginContext,
+	type PluginCommandRegistrar,
 	type PluginContext,
 	type PluginContextDependencies,
 	type PluginDefinition,

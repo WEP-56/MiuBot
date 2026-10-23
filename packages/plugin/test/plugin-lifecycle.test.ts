@@ -40,6 +40,7 @@ function setup(permissions: PluginPermission[] = []) {
 		logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 		registerTool: () => () => {},
 		registerExtension: () => () => {},
+		registerCommand: () => () => {},
 	});
 	return { lifecycle, context, sendMessage, subscribes, unsubscribed };
 }
@@ -167,6 +168,7 @@ describe("plugin context permissions", () => {
 			logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 			registerTool: () => () => {},
 			registerExtension: () => () => {},
+			registerCommand: () => () => {},
 		});
 		await context.messages.sendText("bot-9", { scope: "c2c", targetId: "u-1" }, "hi");
 		expect(sendMessage).toHaveBeenCalledOnce();

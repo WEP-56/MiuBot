@@ -3,10 +3,10 @@ import type { McpServerConfig } from "@miubot/plugin/tools/index";
 import type { WebSearchProvider } from "../../runtime.ts";
 import { toolNames } from "../../tool-names.ts";
 import type { HttpContext } from "../context.ts";
-import { toolCatalog } from "../present.ts";
+import { publicConfig, toolCatalog } from "../present.ts";
 import { body, json } from "../response.ts";
 
-/** `/api/tools` 与 `/api/mcp`：Tool 开关、搜索凭据、MCP 服务器配置。 */
+/** `/api/tools` 与 `/api/mcp`：Tool 开关、搜索凭据、图像提供商选择、MCP 服务器配置。 */
 export async function handleToolRoutes(
 	ctx: HttpContext,
 	req: IncomingMessage,
@@ -25,6 +25,11 @@ export async function handleToolRoutes(
 				configuredProviders: Object.fromEntries(
 					Object.entries(config.tools.webSearch.apiKeys).map(([name, key]) => [name, Boolean(key)]),
 				),
+			},
+			// 与 `/api/config` 同一份投影：拆页面不拆接口，避免出现两个真相。
+			imageGen: {
+				providerId: config.tools.imageGen.providerId,
+				providers: publicConfig(config).imageProviders,
 			},
 		});
 		return true;
@@ -143,6 +148,35 @@ export async function handleToolRoutes(
 			input.skillsEnabled === undefined ? config.tools.skillsEnabled : input.skillsEnabled === true;
 		const stickersEnabled =
 			input.stickersEnabled === undefined ? config.tools.stickersEnabled : input.stickersEnabled === true;
+		/**
+		 * 图像提供商：与 `webSearch.provider` 同一个写入口，不再另开第二个。
+		 *
+		 * 选中的必须是「存在 + 已启用 + 有 Key」的提供商——放行一个用不了的选项，只会让
+		 * `image_gen` 在真正调用时才报错，而那时用户已经在群里等了。
+		 */
+		const imageGenInput =
+			typeof input.imageGen === "object" && input.imageGen !== null
+				? (input.imageGen as Record<string, unknown>)
+				: {};
+		const imageGenProviderId =
+			imageGenInput.providerId === undefined
+				? config.tools.imageGen.providerId
+				: String(imageGenInput.providerId ?? "").trim();
+		if (imageGenProviderId) {
+			const chosen = config.imageProviders.find((item) => item.id === imageGenProviderId);
+			if (!chosen) {
+				json(res, 400, { ok: false, message: `图像提供商不存在：${imageGenProviderId}` });
+				return true;
+			}
+			if (!chosen.enabled) {
+				json(res, 400, { ok: false, message: `图像提供商 ${chosen.name} 已停用，请先启用或换一个` });
+				return true;
+			}
+			if (!chosen.apiKey) {
+				json(res, 400, { ok: false, message: `图像提供商 ${chosen.name} 尚未配置 API Key` });
+				return true;
+			}
+		}
 		config.tools = {
 			enabled: [...new Set(input.enabled as string[])],
 			mcpEnabled,
@@ -155,6 +189,7 @@ export async function handleToolRoutes(
 				provider: (provider as WebSearchProvider | undefined) ?? config.tools.webSearch.provider,
 				apiKeys,
 			},
+			imageGen: { providerId: imageGenProviderId },
 		};
 		await ctx.config.save();
 		if (skillsEnabled !== previousSkillsEnabled || stickersEnabled !== previousStickersEnabled)
@@ -173,6 +208,10 @@ export async function handleToolRoutes(
 			webSearch: {
 				provider: config.tools.webSearch.provider,
 				configuredProviders: Object.fromEntries(Object.entries(apiKeys).map(([name, key]) => [name, Boolean(key)])),
+			},
+			imageGen: {
+				providerId: config.tools.imageGen.providerId,
+				providers: publicConfig(config).imageProviders,
 			},
 		});
 		return true;

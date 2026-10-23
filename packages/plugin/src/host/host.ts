@@ -9,6 +9,12 @@ import type {
 } from "@miubot/shared/platform/events";
 import type { MessageTarget, PluginTextOptions } from "@miubot/shared/platform/outbound";
 import {
+	createPluginCommandRegistry,
+	type PluginCommandDefinition,
+	type PluginCommandInvocation,
+	type PluginCommandRegistry,
+} from "./commands.ts";
+import {
 	type ConfigIssue,
 	compactAgainstDefaults,
 	configuredSecretKeys,
@@ -46,6 +52,8 @@ export type PluginStatus = {
 	tools: string[];
 	/** 该插件贡献的对话钩子名（停用后清空）。 */
 	extensions: string[];
+	/** 该插件注册的斜杠命令名（停用后清空）。 */
+	commands: string[];
 	/** manifest 是否声明了 `config`；工作台据此决定要不要显示「配置」按钮。 */
 	hasConfig: boolean;
 	/** 插件目录的绝对路径；内置目录与用户安装目录据此区分。 */
@@ -133,6 +141,12 @@ export type PluginHostDependencies = {
 	 * 传回调而不是快照：MCP 服务器是运行时才连上的。
 	 */
 	reservedToolNames?: () => Iterable<string>;
+	/**
+	 * 已被内置命令占用的名字（`new` / `compact` / …）。
+	 *
+	 * 与工具同理：插件命令不能覆盖内置命令，否则「用户以为在敲内置命令、实际跑了插件代码」。
+	 */
+	reservedCommandNames?: () => Iterable<string>;
 };
 
 type PluginEntry = {
@@ -187,6 +201,15 @@ export function createPluginHost(deps: PluginHostDependencies) {
 	});
 	/** 插件贡献的对话钩子；与工具注册表同源，存活判定都绑在 `entries` 上。 */
 	const extensions: PluginExtensionRegistry = createPluginExtensionRegistry({
+		isLive: (pluginId, generation) => {
+			const entry = entries.get(pluginId);
+			return Boolean(entry && entry.lifecycle.state === "active" && entry.lifecycle.generation === generation);
+		},
+		logger: deps.logger,
+	});
+	/** 插件注册的斜杠命令；存活判定同上，另外还要和内置命令查重。 */
+	const commands: PluginCommandRegistry = createPluginCommandRegistry({
+		reservedNames: () => deps.reservedCommandNames?.() ?? [],
 		isLive: (pluginId, generation) => {
 			const entry = entries.get(pluginId);
 			return Boolean(entry && entry.lifecycle.state === "active" && entry.lifecycle.generation === generation);
@@ -319,6 +342,7 @@ export function createPluginHost(deps: PluginHostDependencies) {
 			disposers: entry.lifecycle.disposerCount,
 			tools: tools.namesOf(entry.manifest.id),
 			extensions: extensions.namesOf(entry.manifest.id),
+			commands: commands.namesOf(entry.manifest.id),
 			hasConfig: entry.manifest.config !== undefined,
 			directory: entry.directory,
 			removable: entry.source === "plugin" && isInstalledDirectory(entry.directory),
@@ -471,6 +495,8 @@ export function createPluginHost(deps: PluginHostDependencies) {
 				tools.register({ pluginId, generation, botIds, definition }),
 			registerExtension: (pluginId, generation, name, factory: PluginExtensionFactory) =>
 				extensions.register({ pluginId, generation, botIds, name, factory }),
+			registerCommand: (pluginId, generation, definition: PluginCommandDefinition) =>
+				commands.register({ pluginId, generation, botIds, definition }),
 		});
 		entry.context = context;
 		// 插件自定义的 dispose 登记在最前，因此清理时最后执行——此时能力已撤销，
@@ -531,6 +557,7 @@ export function createPluginHost(deps: PluginHostDependencies) {
 		// 清理函数已逐个撤销，这里再兜一层：插件若在 dispose 里重新注册，也不会留到停用之后。
 		tools.removeOwner(id);
 		extensions.removeOwner(id);
+		commands.removeOwner(id);
 		for (const failure of failures) deps.logger.warn(`插件 ${id} 清理失败：${failure.error}`);
 		deps.logger.info(`插件已停用：${id}`);
 		// 没有剩余订阅者时断开总线，避免空转分发。
@@ -862,6 +889,27 @@ export function createPluginHost(deps: PluginHostDependencies) {
 		extensions: {
 			factoriesFor: extensions.factoriesFor,
 			list: extensions.list,
+		},
+		/**
+		 * 插件斜杠命令。
+		 *
+		 * 宿主只负责「注册、存活、Bot 范围」，分发与权限判定在服务端：命令的入口是
+		 * 入站消息，而宿主的职责边界止于插件能力。
+		 */
+		commands: {
+			/** 命中且仍存活的命令；对外只给描述性字段，注册对象留在宿主内部。 */
+			find(name: string, scope: { botId: string }) {
+				const registration = commands.find(name, scope);
+				if (!registration) return undefined;
+				return {
+					pluginId: registration.pluginId,
+					name: registration.definition.name,
+					description: registration.definition.description,
+					permission: registration.definition.permission,
+				};
+			},
+			run: (invocation: PluginCommandInvocation) => commands.run(invocation),
+			list: commands.list,
 		},
 		/** manifest 声明的配置 schema；未声明时为 `undefined`。 */
 		config: {

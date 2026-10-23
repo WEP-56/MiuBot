@@ -8,6 +8,7 @@ import { DefaultResourceLoader } from "@miubot/session/resource-loader";
 import { createAgentSession } from "@miubot/session/sdk";
 import { SessionManager } from "@miubot/session/session-manager";
 import type { QQBot, QQBotInboundMessage } from "@tencent-connect/qqbot-nodejs";
+import { resolveImageProvider } from "./image-provider.ts";
 import { downloadImage } from "./media.ts";
 import type { OutboundChannel } from "./platform/outbound.ts";
 import type { AppConfig, ModelConfig, ProviderConfig } from "./runtime.ts";
@@ -33,6 +34,10 @@ export type RuntimeSession = {
 	createdAt: string;
 	updatedAt: string;
 	active: boolean;
+	/** 最近一次真正给出回答的模型（`provider/model`）。主模型与备用模型都会记录。 */
+	lastModelUsed?: string;
+	/** 最近一次因主模型连续失败而临时改用备用模型的时间（ISO）。 */
+	lastFallbackAt?: string;
 };
 export type PeerConfig = {
 	botId: string;
@@ -42,7 +47,20 @@ export type PeerConfig = {
 	personaId: string;
 	providerId: string;
 	modelId: string;
+	/**
+	 * 备用模型：同一轮对话里主模型连续失败 3 次后临时换用，本轮结束即恢复主模型。
+	 * 空字符串 = 不启用（不重试，行为与以前一致）。
+	 */
+	fallbackProviderId: string;
+	fallbackModelId: string;
 	useTools: boolean;
+	/**
+	 * 工具覆盖：`null` = 继承全局 `tools.enabled`；数组 = 只启用这些内置工具。
+	 *
+	 * 只作用于「内置 + 可配置」那一段：`load_skill` / 表情包工具 / MCP / 插件工具
+	 * 仍由各自的开关决定，不跟着这个清单走。
+	 */
+	toolsOverride: string[] | null;
 	features: { activeReply: boolean };
 };
 
@@ -121,6 +139,33 @@ export function createAgentHost(deps: AgentHostDependencies) {
 		return model;
 	}
 
+	/** 已经告警过的坏备用模型；同一份配置不该每条消息刷一次 WARN。 */
+	const warnedFallbacks = new Set<string>();
+
+	/**
+	 * 解析对象配置里的备用模型。
+	 *
+	 * 未配置时返回 `undefined`（不重试，行为与以前完全一致）；配置了但已不可用
+	 * （提供商被停用、Key 被清空、模型被删）时也只告警一次——静默不重试最难排查。
+	 */
+	async function getFallbackModel(peer: PeerConfig | undefined) {
+		const providerId = peer?.fallbackProviderId;
+		const modelId = peer?.fallbackModelId;
+		if (!providerId || !modelId) return undefined;
+		const current = config();
+		const provider = current.providers.find((item) => item.id === providerId && item.enabled && item.apiKey);
+		const modelConfig = provider?.models.find((item) => item.id === modelId);
+		if (!provider || !modelConfig) {
+			const key = `${providerId}/${modelId}`;
+			if (!warnedFallbacks.has(key)) {
+				warnedFallbacks.add(key);
+				deps.log?.("WARN", `备用模型 ${key} 不可用（提供商未启用、缺少 API Key 或模型已删除），本轮不会重试`);
+			}
+			return undefined;
+		}
+		return getPiModel(provider, modelConfig);
+	}
+
 	function applyPeerConfigToSession(session: RuntimeSession, peer: PeerConfig | undefined): void {
 		if (!peer) return;
 		const persona = config().personas.find((item) => item.id === peer.personaId);
@@ -136,9 +181,11 @@ export function createAgentHost(deps: AgentHostDependencies) {
 		const current = config();
 		const peer = deps.getPeerConfig(runtimeSession.scope, runtimeSession.peerId, runtimeSession.botId);
 		if (peer?.useTools === false) return [];
+		// 对象级覆盖：`null` 表示继承全局。仍然只认白名单里的内置工具名，
+		// 配置里残留的其它值一律忽略。
+		const configuredTools = peer?.toolsOverride ?? current.tools.enabled;
 		return [
-			// 只认 `/api/tools` 白名单里的名字：配置里残留的其它值一律忽略。
-			...current.tools.enabled.filter(
+			...configuredTools.filter(
 				(name) => toolNames.includes(name) && !(deps.disableNativeTools && isNativeTool(name)),
 			),
 			...(current.tools.skillsEnabled ? ["load_skill"] : []),
@@ -212,8 +259,8 @@ export function createAgentHost(deps: AgentHostDependencies) {
 				: {}),
 			imageGen: {
 				generate: async ({ prompt, size, quality, signal }) => {
-					const imageProvider = config().imageProviders.find((item) => item.enabled && item.apiKey);
-					if (!imageProvider) throw new Error("请先在提供商页面配置并启用图像生成提供商");
+					// 只认 `tools.imageGen.providerId`：不再「挑第一个启用且有 Key 的」。
+					const imageProvider = resolveImageProvider(config());
 					const context = deps.getStickerContext(runtimeSession.id);
 					if (!context) throw new Error("当前没有可用的 QQ 回复目标");
 					const image = await generateOpenAIImage({
@@ -340,6 +387,7 @@ export function createAgentHost(deps: AgentHostDependencies) {
 	return {
 		getModelRuntime,
 		getPiModel,
+		getFallbackModel,
 		applyPeerConfigToSession,
 		applyToolSettings,
 		rebuildAgentSessions,

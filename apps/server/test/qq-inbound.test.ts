@@ -5,6 +5,7 @@ import type { QQBot, QQBotInboundMessage } from "@tencent-connect/qqbot-nodejs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentHost } from "../src/agent-host.ts";
 import { createAppState } from "../src/app-state.ts";
+import { createBuiltinCommands, createCommandDispatcher, createCommandRegistry } from "../src/commands/index.ts";
 import { createMessageDeduplicator } from "../src/platform/inbound.ts";
 import { createInboundReferenceStore } from "../src/platform/plugin-bridge.ts";
 import type { ProactiveRuntime } from "../src/proactive.ts";
@@ -35,6 +36,19 @@ function inbound(overrides: Partial<QQBotInboundMessage> = {}): QQBotInboundMess
 	} as QQBotInboundMessage;
 }
 
+/** 私聊消息：没有群，peerId 就是发送者。 */
+function privateInbound(content: string, messageId = "msg-c2c"): QQBotInboundMessage {
+	return inbound({
+		rawEventType: "C2C_MESSAGE_CREATE",
+		kind: "c2c",
+		content,
+		messageId,
+		groupOpenid: undefined,
+		replyTarget: { scope: "c2c", targetId: "user-1", msgId: messageId },
+		mentions: [],
+	} as Partial<QQBotInboundMessage>);
+}
+
 describe("QQ inbound pipeline", () => {
 	let dir: string;
 
@@ -45,25 +59,39 @@ describe("QQ inbound pipeline", () => {
 		await rm(dir, { recursive: true, force: true });
 	});
 
-	async function setup(overrides: { mentioned?: boolean; allowedPeers?: string[] } = {}) {
+	async function setup(
+		overrides: { mentioned?: boolean; allowedPeers?: string[]; admins?: string[]; disabled?: string[] } = {},
+	) {
 		const state = createAppState({ dataDir: dir });
 		await state.load();
+		if (overrides.admins || overrides.disabled) {
+			state.setConfig({
+				...state.getConfig(),
+				...(overrides.admins ? { admins: overrides.admins } : {}),
+				...(overrides.disabled ? { commands: { disabled: overrides.disabled } } : {}),
+			});
+		}
 		const prompts: string[] = [];
 		const agentSession = {
 			prompt: vi.fn(async (text: string) => {
 				prompts.push(text);
+				// 成功的一轮会留下一条正常的 assistant 消息；失败判定读的就是它。
+				agentSession.messages.push({ role: "assistant", stopReason: "stop", content: [] });
 			}),
+			messages: [] as Array<Record<string, unknown>>,
 			subscribe: vi.fn(() => () => {}),
 			getLastAssistantText: () => "收到啦",
 			model: { provider: "p", id: "m" },
+			setModel: vi.fn(async () => {}),
 			compact: async () => ({ summary: "压缩结果" }),
 		};
 		const agentHost = {
 			getAgentSession: vi.fn(async () => agentSession),
+			getFallbackModel: vi.fn(async () => undefined),
 			applyPeerConfigToSession: vi.fn(),
 			anyAgentLoopRunning: () => false,
 		} as unknown as AgentHost;
-		const sendText = vi.fn(async () => {});
+		const sendText = vi.fn<(target: unknown, text: string) => Promise<void>>(async () => {});
 		const channel = {
 			sendText,
 			openStream: () => ({ supported: false, update: async () => {}, complete: async () => {}, cancel: () => {} }),
@@ -87,6 +115,30 @@ describe("QQ inbound pipeline", () => {
 			reset: vi.fn(),
 		} satisfies StickerTagging;
 		const log = vi.fn();
+		const audit = { record: vi.fn(), list: async () => [], flush: async () => {} };
+
+		// 命令链路用真实实现：`/new` 的行为就是「解析 → 权限 → 建会话」这条路径本身。
+		const builtins = createBuiltinCommands({
+			version: "0.0.0-test",
+			startedAt: Date.now() - 60_000,
+			summary: () => ({
+				bots: { connected: 1, total: 1 },
+				plugins: { active: 0, total: 0 },
+				admins: state.getConfig().admins.length,
+			}),
+		});
+		const commandRegistry = createCommandRegistry({
+			builtins,
+			plugins: { list: () => [], find: () => undefined },
+			isDisabled: (name) => state.getConfig().commands.disabled.includes(name),
+		});
+		const commandDispatcher = createCommandDispatcher({
+			state,
+			agentHost,
+			pluginCommands: { run: vi.fn(async () => {}) },
+			audit,
+			log,
+		});
 
 		const handler = createInboundHandler({
 			state,
@@ -97,12 +149,14 @@ describe("QQ inbound pipeline", () => {
 			proactive,
 			inboundReferences: createInboundReferenceStore(),
 			stickerStore: new StickerStore(dir),
+			commandRegistry,
+			commandDispatcher,
 			allowedPeers: () => overrides.allowedPeers ?? [],
 			log,
 		});
 		const bot = {} as unknown as QQBot;
 		const botConfig = { id: BOT_ID, appId: APP_ID, nickname: "麦麦", avatarUrl: "", appSecret: "", mode: "qr", enabled: true };
-		return { state, handler, bot, botConfig, prompts, sendText, proactive, stickerTagging, agentSession };
+		return { state, handler, bot, botConfig, prompts, sendText, proactive, stickerTagging, agentSession, audit };
 	}
 
 	it("replies to a mentioned group message and persists both sides", async () => {
@@ -164,6 +218,87 @@ describe("QQ inbound pipeline", () => {
 		expect(sessions[0]?.id).not.toBe(first);
 		expect(sessions[1]?.active).toBe(false);
 		expect(sendText).toHaveBeenLastCalledWith(expect.anything(), "已开始新会话。");
+	});
+
+	it("handles /new in a group without a mention", async () => {
+		// 曾经的缺陷：群聊闸门排在命令判定之前，非 @ 的 `/new` 到不了命令分支。
+		const { state, handler, bot, botConfig, sendText, proactive, prompts } = await setup();
+		await handler(bot, botConfig as never, inbound());
+		const first = state.getSessions()[0]?.id;
+		await handler(
+			bot,
+			botConfig as never,
+			inbound({
+				rawEventType: "GROUP_MESSAGE_CREATE",
+				messageId: "msg-2",
+				content: "/new",
+				mentions: [{ member_openid: "user-1", nickname: "小明", is_you: false }],
+			}),
+		);
+
+		const sessions = state.getSessions();
+		expect(sessions).toHaveLength(2);
+		expect(sessions[0]?.id).not.toBe(first);
+		expect(sendText).toHaveBeenLastCalledWith(expect.anything(), "已开始新会话。");
+		// 命中命令即接管：不排队插话，也不进 Agent。
+		expect(proactive.queueGroupMessage).not.toHaveBeenCalled();
+		expect(prompts).toEqual(["你好"]);
+	});
+
+	it("lists only the commands the caller may use on /help", async () => {
+		const { handler, bot, botConfig, sendText } = await setup();
+		await handler(bot, botConfig as never, privateInbound("/help"));
+
+		const text = sendText.mock.calls.at(-1)?.[1] ?? "";
+		expect(text).toContain("/new");
+		expect(text).toContain("/help");
+		// 非管理员看不到管理员命令，免得照着敲一遍才发现被拒。
+		expect(text).not.toContain("/admin");
+	});
+
+	it("rejects an admin command from a non-admin and records it", async () => {
+		const { handler, bot, botConfig, sendText, audit } = await setup();
+		await handler(bot, botConfig as never, privateInbound("/admin"));
+
+		expect(sendText).toHaveBeenLastCalledWith(expect.anything(), "这个命令只有管理员能用。");
+		expect(audit.record).toHaveBeenCalledWith(
+			expect.objectContaining({ action: "command.denied", actor: "user-1" }),
+		);
+	});
+
+	it("lets a configured admin run /admin", async () => {
+		const { handler, bot, botConfig, sendText } = await setup({ admins: ["user-1"] });
+		await handler(bot, botConfig as never, privateInbound("/admin"));
+
+		const text = sendText.mock.calls.at(-1)?.[1] ?? "";
+		expect(text).toContain("Miubot 0.0.0-test");
+		expect(text).toContain("在线 Bot：1/1");
+	});
+
+	it("treats a disabled command as ordinary text", async () => {
+		const { handler, bot, botConfig, prompts, sendText } = await setup({ disabled: ["new"] });
+		await handler(bot, botConfig as never, inbound({ messageId: "msg-9", content: `<@!${APP_ID}> /new` }));
+
+		// 关掉的命令当作不存在：消息按普通聊天进 Agent。
+		expect(prompts).toEqual(["/new"]);
+		expect(sendText).not.toHaveBeenCalledWith(expect.anything(), "已开始新会话。");
+	});
+
+	it("leaves unknown slash text to the proactive window in groups", async () => {
+		const { handler, bot, botConfig, proactive } = await setup();
+		await handler(
+			bot,
+			botConfig as never,
+			inbound({
+				rawEventType: "GROUP_MESSAGE_CREATE",
+				messageId: "msg-3",
+				content: "/foo 你好",
+				mentions: [{ member_openid: "user-1", nickname: "小明", is_you: false }],
+			}),
+		);
+
+		// 只接管已注册的命令，否则会误吞群友的消息。
+		expect(proactive.queueGroupMessage).toHaveBeenCalled();
 	});
 
 	it("ignores peers outside the whitelist without leaving a trace", async () => {

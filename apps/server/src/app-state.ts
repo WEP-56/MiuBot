@@ -87,7 +87,10 @@ export function createAppState(options: { dataDir: string }): AppState {
 			personaId: config.activePersonaId || config.personas[0]?.id || "",
 			providerId: defaults?.provider.id ?? "",
 			modelId: defaults?.model.id ?? "",
+			fallbackProviderId: "",
+			fallbackModelId: "",
 			useTools: true,
+			toolsOverride: null,
 			features: { activeReply: false },
 		};
 	}
@@ -115,6 +118,16 @@ export function createAppState(options: { dataDir: string }): AppState {
 			const { qq: _legacyQq, ...current } = stored;
 			const defaults = createDefaultConfig();
 			const savedTools = current.tools as Partial<AppConfig["tools"]> | undefined;
+			const imageProviders = Array.isArray(current.imageProviders)
+				? current.imageProviders
+				: defaults.imageProviders;
+			/**
+			 * 老配置没有 `tools.imageGen`：把**当时真正生效**的那个记下来。
+			 *
+			 * 旧逻辑是「第一个启用且有 Key 的图像提供商」，不迁移的话升级后 `image_gen`
+			 * 会突然变成「未配置」，而用户什么都没改。
+			 */
+			const legacyImageProviderId = imageProviders.find((item) => item.enabled && item.apiKey)?.id ?? "";
 			config = {
 				...defaults,
 				...current,
@@ -151,8 +164,14 @@ export function createAppState(options: { dataDir: string }): AppState {
 						provider: savedTools?.webSearch?.provider ?? defaults.tools.webSearch.provider,
 						apiKeys: { ...defaults.tools.webSearch.apiKeys, ...savedTools?.webSearch?.apiKeys },
 					},
+					imageGen: {
+						providerId:
+							typeof savedTools?.imageGen?.providerId === "string"
+								? savedTools.imageGen.providerId
+								: legacyImageProviderId,
+					},
 				},
-				imageProviders: Array.isArray(current.imageProviders) ? current.imageProviders : defaults.imageProviders,
+				imageProviders,
 				access: {
 					allowedPeers: Array.isArray(current.access?.allowedPeers)
 						? current.access.allowedPeers.filter((key): key is string => typeof key === "string")
@@ -167,6 +186,15 @@ export function createAppState(options: { dataDir: string }): AppState {
 					disabled: Array.isArray(current.plugins?.disabled)
 						? current.plugins.disabled.filter((id): id is string => typeof id === "string")
 						: defaults.plugins.disabled,
+				},
+				// 管理员名单缺失时保持空数组：老配置升级上来时不该凭空多出管理员。
+				admins: Array.isArray(current.admins)
+					? current.admins.filter((id): id is string => typeof id === "string")
+					: defaults.admins,
+				commands: {
+					disabled: Array.isArray(current.commands?.disabled)
+						? current.commands.disabled.filter((name): name is string => typeof name === "string")
+						: defaults.commands.disabled,
 				},
 			};
 			if (!stored.qqBots && stored.qq) await saveConfig();
@@ -241,6 +269,12 @@ export function createAppState(options: { dataDir: string }): AppState {
 							)?.peerName ||
 							`${item.scope === "group" ? "群" : "用户"} ${item.peerId}`,
 						useTools: item.useTools ?? true,
+						// 老配置没有这两项：缺省 = 不启用备用模型、继承全局工具。
+						fallbackProviderId: typeof item.fallbackProviderId === "string" ? item.fallbackProviderId : "",
+						fallbackModelId: typeof item.fallbackModelId === "string" ? item.fallbackModelId : "",
+						toolsOverride: Array.isArray(item.toolsOverride)
+							? item.toolsOverride.filter((name): name is string => typeof name === "string")
+							: null,
 						features: {
 							activeReply:
 								typeof item.features === "object" &&
@@ -268,7 +302,10 @@ export function createAppState(options: { dataDir: string }): AppState {
 					personaId: config.activePersonaId || config.personas[0]?.id || "",
 					providerId: defaults?.provider.id ?? "",
 					modelId: defaults?.model.id ?? "",
+					fallbackProviderId: "",
+					fallbackModelId: "",
 					useTools: true,
+					toolsOverride: null,
 					features: { activeReply: false },
 				});
 			}

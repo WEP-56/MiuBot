@@ -19,7 +19,9 @@ export type PluginPermission =
 	/** 允许注册 Agent Tool（`ctx.tools.register()`）。 */
 	| "tool:register"
 	/** 允许注册对话钩子（`ctx.extensions.register()`）。 */
-	| "extension:register";
+	| "extension:register"
+	/** 允许注册斜杠命令（`ctx.commands.register()`）。 */
+	| "command:register";
 
 const KNOWN_PERMISSIONS = new Set<string>([
 	"message:send",
@@ -27,6 +29,7 @@ const KNOWN_PERMISSIONS = new Set<string>([
 	"storage:write",
 	"tool:register",
 	"extension:register",
+	"command:register",
 	"event:*",
 	"event:message.received",
 	"event:message.sent",

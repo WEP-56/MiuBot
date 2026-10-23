@@ -9,6 +9,7 @@ import type { McpRuntime } from "@miubot/plugin/tools/index";
 import type { AgentHost, PeerConfig, RuntimeSession } from "../agent-host.ts";
 import type { AuditLog } from "../audit.ts";
 import type { AuthService } from "../auth.ts";
+import type { CommandCatalogEntry } from "../commands/index.ts";
 import type { RuntimeLog } from "../logging.ts";
 import type { ProactiveDecision, ProactiveMetrics } from "../proactive.ts";
 import type { QqConnectionState, QrState } from "../qq/connection.ts";
@@ -102,6 +103,15 @@ export type HttpContext = {
 		scheduleTagging(delayMs?: number): void;
 		/** 打标模型变化后丢弃当前任务与重试计数，重新排期。 */
 		resetTagging(): void;
+	};
+	/**
+	 * 斜杠命令清单。
+	 *
+	 * 只读：注册由代码与插件决定，管理面能改的是「哪些关着、谁是管理员」，
+	 * 那两项落在 `config.commands` / `config.admins`，由 `PUT /api/commands` 写。
+	 */
+	commands: {
+		list(): CommandCatalogEntry[];
 	};
 	proactive: {
 		metrics: ProactiveMetrics;

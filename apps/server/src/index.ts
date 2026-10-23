@@ -14,6 +14,7 @@ import { createApiSecurity, loadOrCreateAuthToken } from "./api-security.ts";
 import { createAppState } from "./app-state.ts";
 import { createAuditLog } from "./audit.ts";
 import { createAuthService } from "./auth.ts";
+import { createBuiltinCommands, createCommandDispatcher, createCommandRegistry } from "./commands/index.ts";
 import type { HttpContext } from "./http/context.ts";
 import { createRequestHandler } from "./http/server.ts";
 import { createWebAssets } from "./http/static.ts";
@@ -135,6 +136,32 @@ const stickerStore = new StickerStore(dataDir);
 const mcpRuntime = new McpRuntime();
 
 /**
+ * 进程启动时间：`/admin` 用它算运行时长。取在装配之前，等于「进程开始工作」的时刻。
+ */
+const startedAt = Date.now();
+/**
+ * 内置斜杠命令。
+ *
+ * 先建它再建插件宿主：宿主需要内置命令名做查重（插件不能覆盖 `/new` 这类入口）。
+ * `summary` 是闭包，只在真的有人敲 `/admin` 时求值，因此可以引用后面才装配的子系统。
+ */
+const builtinCommands = createBuiltinCommands({
+	version,
+	startedAt,
+	summary: () => ({
+		bots: {
+			connected: [...connection.states.values()].filter((item) => item.phase === "connected").length,
+			total: state.getConfig().qqBots.length,
+		},
+		plugins: {
+			active: pluginHost.list().filter((plugin) => plugin.state === "active").length,
+			total: pluginHost.list().length,
+		},
+		admins: state.getConfig().admins.length,
+	}),
+});
+
+/**
  * 装配顺序有依赖：插件宿主先建（Agent 会话要从中取插件工具），
  * 平台对象又要早于插件宿主（事件总线是插件的订阅源），因此平台排在中间。
  * `connection` 仍需留声明：平台与插件桥的回调只在运行时才用到它。
@@ -190,6 +217,19 @@ const pluginHost: PluginHost = createPluginHost({
 		...auxiliaryToolNames,
 		...mcpRuntime.getEnabledToolDefinitions().map((tool) => tool.name),
 	],
+	// 同理，插件命令不能覆盖内置命令：用户敲的是 `/名字`，抢到名字就等于换掉了实现。
+	reservedCommandNames: () => builtinCommands.map((command) => command.name),
+});
+
+/**
+ * 斜杠命令注册表：内置命令 + 存活插件命令，减去配置里禁用的。
+ *
+ * 禁用读的是配置而不是快照：工作台改完立即生效，不需要重启。
+ */
+const commandRegistry = createCommandRegistry({
+	builtins: builtinCommands,
+	plugins: { list: pluginHost.commands.list, find: pluginHost.commands.find },
+	isDisabled: (name) => state.getConfig().commands.disabled.includes(name),
 });
 
 const agentHost = createAgentHost({
@@ -223,6 +263,18 @@ const proactive = createProactive({
 	getClient: (botId) => connection.client(botId),
 	log,
 });
+/**
+ * 命令分发：权限判定与执行的唯一入口。
+ *
+ * 内置命令与插件命令都从这里过一遍，不因为来源不同而放宽；越权尝试会写审计。
+ */
+const commandDispatcher = createCommandDispatcher({
+	state,
+	agentHost,
+	pluginCommands: pluginHost.commands,
+	audit,
+	log,
+});
 const inbound = createInboundHandler({
 	state,
 	agentHost,
@@ -231,6 +283,8 @@ const inbound = createInboundHandler({
 	proactive,
 	inboundReferences,
 	stickerStore,
+	commandRegistry,
+	commandDispatcher,
 	// 环境变量优先：设了 MIUBOT_ALLOWED_PEERS 就以它为准，工作台只读展示。
 	allowedPeers: () => envAllowedPeers ?? state.getConfig().access.allowedPeers,
 	log,
@@ -284,6 +338,7 @@ const httpContext: HttpContext = {
 		directories: [builtinPluginsDir, pluginsDir],
 	},
 	stickers: { store: stickerStore, scheduleTagging: stickerTagging.schedule, resetTagging: stickerTagging.reset },
+	commands: { list: commandRegistry.list },
 	proactive: { metrics: proactive.metrics, decisions: proactive.decisions, sentToday: proactive.sentToday },
 	qq: {
 		states: connection.states,
@@ -356,6 +411,14 @@ if (riskyTools.length > 0)
 		`已启用高危工具：${riskyTools.join("、")}——公网部署下这等于把服务器交给任何能给 Bot 发消息的人（提示注入 = RCE）`,
 	);
 if (disableNativeTools) log("WARN", "MIUBOT_DISABLE_NATIVE_TOOLS 已生效：文件与命令类工具全部禁用");
+// 管理员名单为空是**刻意**的安全默认：没人能执行 `/admin` 这类命令。但不说出来，
+// 用户会以为是命令坏了，所以启动时就点名。
+if (state.getConfig().admins.length === 0)
+	log("WARN", "未配置管理员：所有管理员命令（如 /admin）都不会响应（工作台「高级配置 → 斜杠命令」）");
+else log("INFO", `管理员：${state.getConfig().admins.length} 人`);
+const disabledCommands = state.getConfig().commands.disabled;
+if (disabledCommands.length > 0)
+	log("INFO", `已禁用斜杠命令：${disabledCommands.map((name) => `/${name}`).join("、")}`);
 if ((await assets.index()) === undefined)
 	log("WARN", `未找到工作台构建产物：${assets.distDir}/index.html（开发时用 vite dev，部署前先构建）`);
 log("INFO", "Miubot Server 已启动");

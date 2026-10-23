@@ -3,7 +3,9 @@ import type { HttpContext } from "./context.ts";
 import { handleAccessRoutes } from "./routes/access.ts";
 import { handleAuthRoutes } from "./routes/auth.ts";
 import { handleChatRoutes } from "./routes/chat.ts";
+import { handleCommandRoutes } from "./routes/commands.ts";
 import { handleConfigRoutes } from "./routes/config.ts";
+import { handleOverviewRoutes } from "./routes/overview.ts";
 import { handlePersonaRoutes } from "./routes/personas.ts";
 import { handlePluginRoutes } from "./routes/plugins.ts";
 import { handleProactiveRoutes } from "./routes/proactive.ts";
@@ -26,8 +28,10 @@ const handlers: RouteHandler[] = [
 	handleAuthRoutes,
 	handleSystemRoutes,
 	handleAccessRoutes,
+	handleCommandRoutes,
 	handleConfigRoutes,
 	handleToolRoutes,
+	handleOverviewRoutes,
 	handleProactiveRoutes,
 	handleStickerRoutes,
 	handleSkillRoutes,

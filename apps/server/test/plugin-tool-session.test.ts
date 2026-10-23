@@ -165,11 +165,38 @@ describe("插件工具进入 Agent 会话", () => {
 			personaId: "default",
 			providerId: "test-provider",
 			modelId: "test-model",
+			fallbackProviderId: "",
+			fallbackModelId: "",
 			useTools: false,
+			toolsOverride: null,
 			features: { activeReply: false },
 		};
 		const session = await agentHost.getAgentSession(runtimeSession({ id: "session-2" }));
 		expect(session.getActiveToolNames()).not.toContain("roll_dice");
+		peerOverride = undefined;
+	});
+
+	it("对象自定义工具清单只保留勾选的内置工具，插件工具不受影响", async () => {
+		peerOverride = {
+			botId: "bot-1",
+			scope: "group",
+			peerId: "group-1",
+			name: "测试群",
+			personaId: "default",
+			providerId: "test-provider",
+			modelId: "test-model",
+			fallbackProviderId: "",
+			fallbackModelId: "",
+			useTools: true,
+			// 全局是 ["read"]，这里改成只要网页搜索。
+			toolsOverride: ["web_search"],
+			features: { activeReply: false },
+		};
+		const session = await agentHost.getAgentSession(runtimeSession({ id: "session-4" }));
+		expect(session.getActiveToolNames()).toContain("web_search");
+		expect(session.getActiveToolNames()).not.toContain("read");
+		// 插件工具跟着插件启停走，不跟着这个清单走。
+		expect(session.getActiveToolNames()).toContain("roll_dice");
 		peerOverride = undefined;
 	});
 });

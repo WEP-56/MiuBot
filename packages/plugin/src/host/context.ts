@@ -5,6 +5,7 @@ import type {
 	PlatformEventType,
 } from "@miubot/shared/platform/events";
 import type { MessageTarget, PluginMessageSender, PluginTextOptions } from "@miubot/shared/platform/outbound";
+import type { PluginCommandDefinition } from "./commands.ts";
 import type { PluginConfigAccess } from "./config.ts";
 import type { PluginExtensionFactory } from "./extensions.ts";
 import type { PluginLifecycle } from "./lifecycle.ts";
@@ -46,6 +47,8 @@ export type PluginContext = {
 	readonly tools: PluginToolRegistrar;
 	/** 注册对话钩子（Pi Extension）；需要 manifest 声明 `extension:register`。 */
 	readonly extensions: PluginExtensionRegistrar;
+	/** 注册斜杠命令；需要 manifest 声明 `command:register`。 */
+	readonly commands: PluginCommandRegistrar;
 	/** 登记清理函数，停用时按后进先出顺序执行。 */
 	onDispose(disposer: () => void | Promise<void>): void;
 	/** 插件被停用时触发。是**本实例**的信号，不会被后续重启覆盖。 */
@@ -64,6 +67,16 @@ export type PluginToolRegistrar = {
 /** 插件扩展注册面。`name` 在插件内唯一，最终路径是 `plugin:{pluginId}/{name}`。 */
 export type PluginExtensionRegistrar = {
 	register(extension: { name: string; factory: PluginExtensionFactory }): () => void;
+};
+
+/**
+ * 插件命令注册面。
+ *
+ * `name` 与内置命令、其它插件的命令共享同一个命名空间：用户敲的是 `/名字`，
+ * 两个实现抢同一个名字时只能有一个赢，所以冲突直接失败。
+ */
+export type PluginCommandRegistrar = {
+	register(command: PluginCommandDefinition): () => void;
 };
 
 /** 插件专用的事件订阅面：在只读契约之上增加「是否接收自身来源」的开关。 */
@@ -119,6 +132,8 @@ export type PluginContextDependencies = {
 		name: string,
 		factory: PluginExtensionFactory,
 	) => () => void;
+	/** 命令注册入口；同上。 */
+	registerCommand: (pluginId: string, generation: number, definition: PluginCommandDefinition) => () => void;
 };
 
 /** 订阅权限覆盖：`event:*` 授权全部事件类型。 */
@@ -284,6 +299,21 @@ export function createPluginContext(deps: PluginContextDependencies): PluginCont
 					throw new PluginInactiveError(deps.manifestId, "未声明权限 extension:register");
 				}
 				const unregister = deps.registerExtension(deps.manifestId, generation, extension.name, extension.factory);
+				const untrack = lifecycle.track(unregister);
+				return () => {
+					untrack();
+					unregister();
+				};
+			},
+		},
+		commands: {
+			register(command) {
+				guard(`注册命令 ${command.name}`);
+				if (!permissions.has("command:register")) {
+					throw new PluginInactiveError(deps.manifestId, "未声明权限 command:register");
+				}
+				// 与工具同一套：宿主负责命名冲突与 Bot 作用域，这里只补「插件是否还有权注册」。
+				const unregister = deps.registerCommand(deps.manifestId, generation, command);
 				const untrack = lifecycle.track(unregister);
 				return () => {
 					untrack();
