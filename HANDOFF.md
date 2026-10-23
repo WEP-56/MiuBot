@@ -1,7 +1,7 @@
 # 交接文档：Plugin 模块（阶段 A / B / C 主体已完成）
 
 > 用途：因会话上下文过长，在新会话继续开发时先读这份。
-> 最后更新：2026-10-23 11:05
+> 最后更新：2026-10-23 12:05
 
 **第一次读这份时按这个顺序：**
 
@@ -16,11 +16,13 @@
 
 **阶段 A（事件型插件）、阶段 B（插件注册 Agent Tool + Pi Extension 钩子）、阶段 C（管理 API + 工作台插件页）均已完成并推送。** 管理面安全与 `index.ts` 职责拆分也已就绪（2160 → 约 215 行）。
 
-**阶段 C 的 Schema Config 已完成（2026-10-23，尚未提交）**：manifest 声明 `config` → 宿主校验并合成默认值 → 工作台渲染表单 → 插件从 `ctx.config` 读。`miubot.welcome` 已从「把欢迎语存在插件存储里」迁到 manifest 配置。
+**阶段 C 的 Schema Config 已完成（2026-10-23，`88fee6d`）**：manifest 声明 `config` → 宿主校验并合成默认值 → 工作台渲染表单 → 插件从 `ctx.config` 读。`miubot.welcome` 已从「把欢迎语存在插件存储里」迁到 manifest 配置。
 
-**插件闭环现在是完整的**：事件订阅 / 发消息 / 存储 / Agent Tool / 对话钩子五条能力都有权限、代次、`bots` 作用域三道校验，启停即生效（重建会话），失败都写进插件状态或运行日志；配置面（Schema Config）也已接通。剩下的活是**分发面**（安装/卸载、独立 WebUI）和几只遗留 P2。
+**本地插件包的安装 / 卸载已完成（2026-10-23，未提交）**：`POST /api/plugins/install` 从本地目录复制插件包，`POST /api/plugins/:id/uninstall` 删除插件目录并按勾选处理数据与配置。范围仍是本地可信包——不做网页上传、zip、远程安装。
 
-验证门禁全绿：`npm run check` / `npm run lint` / `npm test`（**190 files / 1813 tests**）。
+**插件闭环现在是完整的**：事件订阅 / 发消息 / 存储 / Agent Tool / 对话钩子五条能力都有权限、代次、`bots` 作用域三道校验，启停即生效（重建会话），失败都写进插件状态或运行日志；配置面（Schema Config）与分发面（本地安装/卸载）也已接通。剩下的活是独立 WebUI 入口、后台任务/调度与几只遗留 P2。
+
+验证门禁全绿：`npm run check` / `npm run lint` / `npm test`（**191 files / 1838 tests**）。
 
 最近八次提交：
 
@@ -98,6 +100,7 @@
 | `lifecycle.ts` | `AbortController` + disposers 栈（LIFO）+ 运行代次 |
 | `context.ts` | 插件能力包装：代次 / 权限 / Bot 范围三重校验 |
 | `config.ts` | Schema Config：声明校验、默认值合成、输入校验、文件读写、`ctx.config` 访问器 |
+| `install.ts` | 本地插件包：目录包校验（manifest / 入口存在 / 拒绝符号链接 / 文件数与体积上限）、复制、删除 |
 | `loader.ts` | `.ts` 走 jiti；`.js`/`.mjs`/`.cjs` 走原生 `import()` |
 | `storage.ts` | 每插件一个 JSON 文件，串行化写入 |
 | `rate-limit.ts` | 出站滑动窗口限流 |
@@ -129,6 +132,10 @@
 13. **secret 是三态语义**：缺省/空串 = 保持原值，`null` = 清除，有值 = 覆盖。遮蔽在宿主 `inspectConfig()` 完成，不在路由——多一个入口（CLI、别的前端）时不该靠每个调用方各自记得处理。
 14. **保存配置后重启插件**（不是重启服务）。配置在 `setup()` 里读，重启才能生效；已停用的插件不会被顺带拉起。重启会让工具以新代次注册，**必须跟着 `rebuildAgentSessions()`**，否则旧会话里的插件工具一调用就被判失效。
 15. **schema 写错 = 插件加载失败**，用户填错 = 保存失败。两者分开：放行一个坏 schema 会让工作台渲染出半截表单，而报错落在「保存失败」上。
+16. **安装目标只能是用户目录**（`installDir`，与内置目录分开声明）。内置目录在仓库里，装进去会被 git 看见、升级时被覆盖。
+17. **安装不覆盖、不自动启动。** 覆盖会让一次手滑把在用的插件换成半成品，升级必须是显式动作；启动与否取决于配置白名单，宿主不读配置——装完由路由按 `isAllowedByConfig` 决定，否则会造出「配置里禁用却跑着、下次重启就消失」的假活。
+18. **卸载默认保留数据与配置**，删除要分别显式勾选。删代码是明确动作，删用户数据不是。
+19. **插件包里的符号链接一律拒绝。** `cp` 按链接本身复制，装完链接仍指向源目录之外，等于绕过了 `entry` 的路径校验。安装路径还必须是绝对路径：相对路径会按服务进程的 cwd 解析，用户以为是仓库根、实际是 `apps/server`。
 
 ---
 
@@ -139,6 +146,7 @@
 - **内置优先**：`pluginsDir: [builtinPluginsDir, pluginsDir]`，同名 id 只认第一个，冲突登记为 `duplicate:*` 诊断条目
 - 插件业务数据：`apps/server/.miubot/plugin-data/<id>.json`
 - 插件配置：`apps/server/.miubot/plugin-config/<id>.json`（与数据分开：卸载时「保留数据」不该顺手保住配置）
+- 安装目标就是用户插件目录 `apps/server/.miubot/plugins/`（内置目录只读，工作台的「安装」不会写进去）
 
 配置（`apps/server/.miubot/config.json`）：
 
@@ -154,20 +162,21 @@
 
 ### 0. 下一步候选（都**未开工**，按建议顺序）
 
-挑一件开工；下面的 1–6 小节是已完成的记录，只用来查落点和约束，不要重做。**当前已无 P0。**
+挑一件开工；下面的 1–7 小节是已完成的记录，只用来查落点和约束，不要重做。**当前已无 P0，只剩一只 P1。**
 
 | 优先级 | 事项 | 落点 / 前置 | 备注 |
 |---|---|---|---|
-| P1 | 本地可信包安装 / 卸载（保留数据与删除数据区分） | `manifest.ts` 的校验现已固化，可直接复用 | 范围冻结仍然有效：不做网页上传、远程安装、插件市场 |
-| P1 | `hasActiveHandler()` 支持按按钮归属判断 | `host.ts` + `platform/qq-adapter.ts` 的 `canHandleInteraction` | 遗留 P1。现在只回答「有没有人在听」，回答不了「这个 `buttonId` 是不是你的」 |
+| P1 | `hasActiveHandler()` 支持按按钮归属判断 | `host.ts` + `platform/qq-adapter.ts` 的 `canHandleInteraction` | 现在只回答「有没有人在听」，回答不了「这个 `buttonId` 是不是你的」。**没有使用按钮交互的插件之前，没有真实需求驱动**，别为了它猜接口 |
 | P2 | 启停不再无条件重建会话 | `routes/plugins.ts` + `agentHost.anyAgentLoopRunning()` | 流式回复会被打断。可改为「有 loop 在跑就延后到空闲」 |
 | P2 | `inboundReferences.take()` 改引用计数 | `platform/plugin-bridge.ts` | 同一入站消息多插件回复时只有第一个拿到被动回复锚点。**会改变被动回复配额语义，先定语义再改** |
 | P2 | `storage.readAll()` 不再吞解析错误 | `host/storage.ts` | 损坏文件下次写入会被覆盖。**抛错会影响容错策略，先定策略** |
 | P2 | 补一次最小 `session.bindExtensions()` | `agent-host.ts` | 让 `session_start` / `resources_discover` 对插件可用；没插件需要之前不必做 |
+| P2 | 诊断条目（`invalid:*`）无法从工作台删除 | `routes/plugins.ts` + `Plugins.tsx` | `uninstall()` 目前只接受 `source === "plugin"`。坏目录只能手动删；要支持就得给诊断行也做一个「删除目录」动作 |
+| P3 | 插件升级（同 id 覆盖安装） | `host.ts` 的 `install()` | 现在必须先卸载。升级需要「先校验新包、再原子替换」，别做成直接覆盖 |
 | P3 | 独立 WebUI 入口登记、插件后台任务/调度、精细审计 | — | 阶段 D，按真实需求再评估，不预先建设 |
 
-下一步如果做安装/卸载，注意配置与数据现在分在两个目录（`plugin-config/` 与 `plugin-data/`），
-「保留数据」和「保留配置」得分别给选项，不要一个开关管两件事。
+下一步如果做「升级」，注意配置与数据现在分在两个目录（`plugin-config/` 与 `plugin-data/`），
+升级要保留两者；而 `uninstall` 的默认行为是保留、删除要显式勾选，别把升级做成一次卸载。
 
 ### 1. 管理面安全（✅ 已完成，阻塞项已解除）
 
@@ -279,6 +288,26 @@ manifest 声明形状（**扁平一层标量**，`x-ui` 只影响渲染）：
 - **`ctx.config` 不设权限位**：插件只能读自己的配置，声明 `config` 本身就是授权。加一个 `config:read` 只会让「声明了 schema 却忘加权限、读到的永远是空对象」变成常见故障。
 - 测试：`packages/plugin/test/plugin-config.test.ts`（27 项，含真实宿主 + 真实 `.ts` 入口的端到端：保存 → 重启 → 插件读到新值）+ `apps/server/test/plugins-route.test.ts` 新增 9 项（secret 不回显、校验失败不落盘、停用插件不自启）。
 - 已按 §九 做过反向验证：去掉 `inspectConfig` 的 secret 剔除 → 密钥漏进响应，测试转红；把 `compactAgainstDefaults` 换成全量写入 → 默认值被钉死，测试转红。
+
+### 7. 本地插件包安装 / 卸载（✅ 2026-10-23，尚未提交）
+
+| 文件 | 职责 |
+|---|---|
+| `packages/plugin/src/host/install.ts` | `inspectPackage`（目录包校验）、`copyPackage`、`deletePackage` |
+| `packages/plugin/src/host/host.ts` | `install(sourceDir)` / `uninstall(id, {deleteData, deleteConfig})`；`PluginStatus.directory` / `.removable` |
+| `apps/server/src/http/routes/plugins.ts` | `POST /api/plugins/install`、`POST /api/plugins/:id/uninstall` |
+| `apps/server/src/index.ts` | `installDir: pluginsDir`；`deleteAssets` 按勾选删 `plugin-data` / `plugin-config` |
+| `apps/web/src/pages/Plugins.tsx` | 顶部「安装」面板（路径输入）、卡片「卸载」二次确认 + 两个勾选 |
+
+要点：
+
+- **范围**：本地目录包。不做网页上传、不做 zip、不做远程下载。Node 没有内置解压，为这一条引依赖不值得，而管理员本来就在这台机器上。
+- **安装做什么**：校验 → 复制到 `<installDir>/<manifest id>` → `discover()`。**不启动**（见 §三.17），启动由路由按配置决定。装完 `rebuildAgentSessions()`，让新工具进已有会话。
+- **校验项**：manifest 合法、入口文件真实存在、无符号链接、文件数 ≤ 2000 / 体积 ≤ 32 MB、路径是绝对路径、id 不与已有条目冲突（含内置同名插件——装上去了也会被「首个目录优先」压住）。
+- **卸载做什么**：`stop()` → 删目录 → 按勾选删资源 → 从 `entries` 移除 → 路由清掉 `config.plugins` 里的 id 并 `save()`。删目录失败时条目保留，用户可以重试。
+- **内置插件拒绝卸载**：`isInstalledDirectory()` 用 `relative()` 判断目录是否在 `installDir` 内，而不是字符串前缀（`plugins-evil` 会以 `plugins` 开头）。
+- 测试：`packages/plugin/test/plugin-install.test.ts`（18 项）+ `apps/server/test/plugins-route.test.ts` 新增 7 项。
+- 反向验证：去掉内置保护 → 内置目录真的被删、测试转红；去掉 id 冲突检查 → 同名内置插件被用户目录的版本覆盖、测试转红。
 
 ---
 

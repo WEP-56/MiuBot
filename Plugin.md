@@ -532,6 +532,8 @@ Agent 主动发言是 Agent 行为策略，插件定时任务是通用调度机�
 | 保存配置 | `PUT /api/plugins/:id/config` | ✅ 已实现（按 schema 校验，逐字段返回 issues；保存后重启运行中的插件） |
 | 启用/停用 | `POST /api/plugins/:id/enable` / `disable` | ✅ 已实现 |
 | 重载 | `POST /api/plugins/:id/reload` | ✅ 已实现（重读 manifest） |
+| 安装本地插件 | `POST /api/plugins/install` | ✅ 已实现（body `{ path }`，本地目录包；不覆盖、不自动启动） |
+| 卸载 | `POST /api/plugins/:id/uninstall` | ✅ 已实现（body `{ deleteData, deleteConfig }`，默认都保留；内置插件拒绝） |
 
 仍是拟定的端点：
 
@@ -539,7 +541,7 @@ Agent 主动发言是 Agent 行为策略，插件定时任务是通用调度机�
 | --- | --- | --- |
 | 读取详情 | `GET /api/plugins/:id` | 描述、运行状态、错误、UI 可用性（schema 已由 `/config` 提供，此端点暂不必要） |
 | 获取管理入口 | `GET /api/plugins/:id/webui` | 经过权限确认的可访问链接或不可用原因 |
-| 安装本地插件 | `POST /api/plugins/install` | 校验包、声明能力、安装结果；首版仅可信来源 |
+| 升级 | `POST /api/plugins/install`（覆盖语义） | 需「先校验新包、再原子替换」，不能直接覆盖在用的插件 |
 
 **注意：** 管理 API 已按域拆到 `apps/server/src/http/routes/*.ts`，新增端点在那里建模块并注册到 `router.ts`，依赖从 `HttpContext` 取；不要在 `json()` 里写 CORS 头。
 
@@ -659,7 +661,10 @@ Agent 主动发言是 Agent 行为策略，插件定时任务是通用调度机�
       只支持扁平一层标量；`secret` 为三态语义（留空保持 / `null` 清除 / 有值覆盖），
       遮蔽在宿主 `inspectConfig()` 完成而不是路由。
 - [ ] 独立 WebUI 入口登记、停止时撤销与远程地址提示。
-- [ ] 本地可信包安装 / 卸载（保留与删除数据区分）。
+- [x] 本地可信包安装 / 卸载（2026-10-23）。`inspectPackage` 校验目录包（manifest、入口存在、
+      拒绝符号链接、文件数与体积上限、绝对路径），复制到 `<installDir>/<manifest id>`；
+      **不覆盖、不自动启动**；卸载先 `stop()` 再删目录，数据与配置默认保留、删除要分别勾选。
+      范围仍是本地可信目录包：不做网页上传、zip、远程下载。
 
 ### 阶段 D：后续扩展（P1+）
 
