@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,6 +85,8 @@ const inboundReferences = createInboundReferenceStore();
 const pluginHost: PluginHost = createPluginHost({
 	// 内置插件优先：同名 id 以仓库内的为准，用户目录用于放自己的插件。
 	pluginsDir: [builtinPluginsDir, pluginsDir],
+	// 安装目标只能是用户目录：内置目录在仓库里，装进去会被 git 看见、升级时被覆盖。
+	installDir: pluginsDir,
 	eventSource: platform.eventBus,
 	sendMessage: createPluginSendBridge(
 		{
@@ -102,6 +104,16 @@ const pluginHost: PluginHost = createPluginHost({
 	),
 	storageFor: (pluginId) => createFileStorage({ root: pluginStorageDir, pluginId }),
 	configFor: (pluginId) => createFilePluginConfig({ root: pluginConfigDir, pluginId }),
+	/**
+	 * 卸载时删除插件的持久化资源。
+	 *
+	 * 数据与配置分别由路由按用户勾选决定，这里只负责落手：两个目录分开存，就是为了
+	 * 「删代码保留数据」和「连配置一起清掉」能各自成立。
+	 */
+	deleteAssets: async (pluginId, options) => {
+		if (options.data) await rm(join(pluginStorageDir, `${pluginId}.json`), { force: true });
+		if (options.config) await rm(join(pluginConfigDir, `${pluginId}.json`), { force: true });
+	},
 	logger: createPluginLogger((level, text) => log(level, text)),
 	// 插件工具不能覆盖内置 / MCP 工具：同名会让模型「以为在调内置工具、实际跑了插件代码」。
 	reservedToolNames: () => [
@@ -189,6 +201,8 @@ const httpContext: HttpContext = {
 		stop: pluginHost.stop,
 		reload: pluginHost.reload,
 		config: { inspect: pluginHost.config.inspect, save: pluginHost.config.save },
+		install: pluginHost.install,
+		uninstall: pluginHost.uninstall,
 		directories: [builtinPluginsDir, pluginsDir],
 	},
 	stickers: { store: stickerStore, scheduleTagging: stickerTagging.schedule, resetTagging: stickerTagging.reset },

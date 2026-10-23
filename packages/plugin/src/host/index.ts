@@ -48,6 +48,16 @@ export {
 	type PluginStatus,
 } from "./host.ts";
 export {
+	copyPackage,
+	DEFAULT_MAX_BYTES,
+	DEFAULT_MAX_FILES,
+	deletePackage,
+	type InstallIssue,
+	inspectPackage,
+	type PackageInspection,
+	type PackageLimits,
+} from "./install.ts";
+export {
 	createPluginLifecycle,
 	PluginInactiveError,
 	type PluginLifecycle,

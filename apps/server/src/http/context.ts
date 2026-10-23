@@ -1,4 +1,10 @@
-import type { ConfigIssue, PluginConfigSnapshot, PluginConfigValues, PluginStatus } from "@miubot/plugin/host/index";
+import type {
+	ConfigIssue,
+	InstallIssue,
+	PluginConfigSnapshot,
+	PluginConfigValues,
+	PluginStatus,
+} from "@miubot/plugin/host/index";
 import type { McpRuntime } from "@miubot/plugin/tools/index";
 import type { AgentHost, PeerConfig, RuntimeSession } from "../agent-host.ts";
 import type { RuntimeLog } from "../logging.ts";
@@ -61,6 +67,15 @@ export type HttpContext = {
 		};
 		/** 插件根目录，按扫描优先级排列；工作台用它提示「插件该放哪里」。 */
 		directories: string[];
+		/** 从本地目录安装插件包。校验与复制都在宿主侧完成。 */
+		install(sourceDir: string): Promise<{ ok: true; status: PluginStatus } | { ok: false; issues: InstallIssue[] }>;
+		/** 卸载插件目录；数据与配置默认保留，要显式要求才删。 */
+		uninstall(
+			id: string,
+			options: { deleteData?: boolean; deleteConfig?: boolean },
+		): Promise<
+			{ ok: true; directory: string; dataDeleted: boolean; configDeleted: boolean } | { ok: false; message: string }
+		>;
 	};
 	stickers: {
 		store: StickerStore;

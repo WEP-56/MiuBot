@@ -27,23 +27,30 @@ type Call = { status: number; body: Record<string, unknown> };
 async function harness(): Promise<{
 	ctx: HttpContext;
 	pluginsDir: string;
+	packagesDir: string;
 	config: AppConfig;
 	saved: () => number;
 	rebuilds: () => number;
+	deleteAssets: ReturnType<typeof vi.fn>;
 	host: PluginHost;
 	call: (method: string, path: string, payload?: unknown) => Promise<Call>;
 }> {
 	const root = await mkdtemp(join(tmpdir(), "miubot-plugins-api-"));
 	roots.push(root);
 	const pluginsDir = join(root, "plugins");
+	const packagesDir = join(root, "packages");
 	await mkdir(pluginsDir, { recursive: true });
+	await mkdir(packagesDir, { recursive: true });
+	const deleteAssets = vi.fn().mockResolvedValue(undefined);
 
 	const host = createPluginHost({
 		pluginsDir,
+		installDir: pluginsDir,
 		eventSource: { subscribe: () => () => undefined },
 		sendMessage: vi.fn().mockResolvedValue(undefined),
 		storageFor: (pluginId) => createFileStorage({ root: join(root, "storage"), pluginId }),
 		configFor: (pluginId) => createFilePluginConfig({ root: join(root, "config"), pluginId }),
+		deleteAssets,
 		logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 	});
 
@@ -68,6 +75,8 @@ async function harness(): Promise<{
 			stop: host.stop,
 			reload: host.reload,
 			config: { inspect: host.config.inspect, save: host.config.save },
+			install: host.install,
+			uninstall: host.uninstall,
 			directories: [pluginsDir],
 		},
 	} as unknown as HttpContext;
@@ -76,7 +85,9 @@ async function harness(): Promise<{
 		ctx,
 		host,
 		pluginsDir,
+		packagesDir,
 		config,
+		deleteAssets,
 		saved: () => saveCount,
 		rebuilds: () => rebuildAgentSessions.mock.calls.length,
 		call: async (method, path, requestBody) => {
@@ -459,6 +470,94 @@ describe("PUT /api/plugins/:id/config", () => {
 		expect(String(response.body.message)).toContain("config");	});
 });
 
+
+describe("POST /api/plugins/install", () => {
+	it("安装本地插件包并在配置放行时启动它", async () => {
+		const h = await harness();
+		await writePlugin(h.packagesDir, "demo.installed");
+
+		const response = await h.call("POST", "/api/plugins/install", {
+			path: join(h.packagesDir, "demo.installed"),
+		});
+		expect(response.status).toBe(200);
+		expect(response.body.installed).toBe("demo.installed");
+		expect(response.body.started).toBe(true);
+		expect(row(response, "demo.installed")).toMatchObject({ state: "active", removable: true });
+		// 新插件的工具要进已有会话，否则要等会话自然过期。
+		expect(h.rebuilds()).toBeGreaterThan(0);
+	});
+
+	it("配置里禁用的 id 装上去但不启动", async () => {
+		const h = await harness();
+		await writePlugin(h.packagesDir, "demo.muted");
+		h.config.plugins.disabled = ["demo.muted"];
+
+		const response = await h.call("POST", "/api/plugins/install", {
+			path: join(h.packagesDir, "demo.muted"),
+		});
+		expect(response.status).toBe(200);
+		expect(response.body.started).toBe(false);
+		expect(row(response, "demo.muted")).toMatchObject({ state: "inactive", enabled: false });
+	});
+
+	it("重复安装返回逐项问题", async () => {
+		const h = await harness();
+		await writePlugin(h.packagesDir, "demo.installed");
+		await h.call("POST", "/api/plugins/install", { path: join(h.packagesDir, "demo.installed") });
+
+		const response = await h.call("POST", "/api/plugins/install", {
+			path: join(h.packagesDir, "demo.installed"),
+		});
+		expect(response.status).toBe(400);
+		expect(response.body.issues).toContainEqual(expect.objectContaining({ field: "id" }));
+	});
+
+	it("路径为空或不存在时返回 400", async () => {
+		const h = await harness();
+		expect((await h.call("POST", "/api/plugins/install", {})).status).toBe(400);
+
+		const missing = await h.call("POST", "/api/plugins/install", { path: join(h.packagesDir, "nope") });
+		expect(missing.status).toBe(400);
+		expect(missing.body.issues).toContainEqual(expect.objectContaining({ field: "path" }));
+	});
+});
+
+describe("POST /api/plugins/:id/uninstall", () => {
+	it("删除插件目录，同时清掉配置里的 id", async () => {
+		const h = await harness();
+		await writePlugin(h.packagesDir, "demo.installed");
+		await h.call("POST", "/api/plugins/install", { path: join(h.packagesDir, "demo.installed") });
+		h.config.plugins.disabled = ["demo.installed"];
+
+		const response = await h.call("POST", "/api/plugins/demo.installed/uninstall", {});
+		expect(response.status).toBe(200);
+		expect(row(response, "demo.installed")).toBeUndefined();
+		// 留着不存在的 id 会让「禁用清单」永远有一行幽灵。
+		expect(h.config.plugins.disabled).toEqual([]);
+		expect(h.saved()).toBeGreaterThan(0);
+	});
+
+	it("默认保留数据与配置，勾选后才删", async () => {
+		const h = await harness();
+		await writePlugin(h.packagesDir, "demo.installed");
+		await h.call("POST", "/api/plugins/install", { path: join(h.packagesDir, "demo.installed") });
+
+		await h.call("POST", "/api/plugins/demo.installed/uninstall", {});
+		expect(h.deleteAssets).not.toHaveBeenCalled();
+
+		const h2 = await harness();
+		await writePlugin(h2.packagesDir, "demo.installed");
+		await h2.call("POST", "/api/plugins/install", { path: join(h2.packagesDir, "demo.installed") });
+		await h2.call("POST", "/api/plugins/demo.installed/uninstall", { deleteData: true, deleteConfig: true });
+		expect(h2.deleteAssets).toHaveBeenCalledWith("demo.installed", { data: true, config: true });
+	});
+
+	it("未知插件返回 404", async () => {
+		const h = await harness();
+		const response = await h.call("POST", "/api/plugins/nope/uninstall", {});
+		expect(response.status).toBe(404);
+	});
+});
 
 describe("错误边界", () => {
 	it("未知插件返回 404", async () => {

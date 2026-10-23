@@ -20,6 +20,10 @@ type Plugin = {
   extensions: string[];
   /** manifest 是否声明了 `config`；只有声明过的插件才有配置表单。 */
   hasConfig?: boolean;
+  /** 插件目录绝对路径；卸载提示要用。 */
+  directory: string;
+  /** 是否可卸载：内置插件随代码分发，工作台不给卸载按钮。 */
+  removable: boolean;
   source: "plugin" | "invalid" | "duplicate";
 };
 
@@ -79,6 +83,9 @@ const STATE_CLASS: Record<PluginState, string> = {
   loading: "pill-gray",
   failed: "pill-red",
 };
+
+/** 安装接口的失败响应：校验问题逐项回来，逐项展示比一句「安装失败」有用。 */
+type InstallIssue = { field: string; message: string };
 
 /** 把 schema 的 `default` 与已保存值合成为表单初始值。 */
 function initialDraft(schema: ConfigSchema, values: ConfigPayload["values"]): Draft {
@@ -341,6 +348,13 @@ export function Plugins() {
   const [busy, setBusy] = useState("");
   /** 当前展开配置表单的插件 id；同时只开一个，避免多个表单争同一个视口。 */
   const [openConfig, setOpenConfig] = useState("");
+  const [installOpen, setInstallOpen] = useState(false);
+  const [installPath, setInstallPath] = useState("");
+  const [installIssues, setInstallIssues] = useState<InstallIssue[]>([]);
+  /** 正在二次确认卸载的插件 id。 */
+  const [uninstalling, setUninstalling] = useState("");
+  const [dropData, setDropData] = useState(false);
+  const [dropConfig, setDropConfig] = useState(false);
 
   const load = async () => {
     const response = await fetch("/api/plugins");
@@ -375,6 +389,66 @@ export function Plugins() {
   const runnable = plugins.filter((plugin) => plugin.source === "plugin");
   const activeCount = runnable.filter((plugin) => plugin.state === "active").length;
 
+  const install = async () => {
+    const path = installPath.trim();
+    if (!path) {
+      setNotice("请填写插件目录的绝对路径");
+      return;
+    }
+    setBusy(":install");
+    setNotice("");
+    setInstallIssues([]);
+    try {
+      const response = await fetch("/api/plugins/install", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path }),
+      });
+      const data = (await response.json()) as Snapshot & {
+        message?: string;
+        issues?: InstallIssue[];
+        installed?: string;
+      };
+      if (!response.ok) {
+        // 校验问题逐条展示：目录填错、manifest 坏、符号链接、体积超限的原因完全不同。
+        setInstallIssues(data.issues ?? []);
+        setNotice(data.message ?? "安装失败");
+        return;
+      }
+      setSnapshot(data);
+      setInstallOpen(false);
+      setInstallPath("");
+      setNotice(`已安装 ${data.installed ?? path}`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const uninstall = async (id: string) => {
+    setBusy(`${id}:uninstall`);
+    setNotice("");
+    try {
+      const response = await fetch(`/api/plugins/${encodeURIComponent(id)}/uninstall`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ deleteData: dropData, deleteConfig: dropConfig }),
+      });
+      const data = (await response.json()) as Snapshot & { message?: string };
+      if (!response.ok) throw new Error(data.message ?? "卸载失败");
+      setSnapshot(data);
+      setUninstalling("");
+      setDropData(false);
+      setDropConfig(false);
+      setNotice(`已卸载 ${id}${dropData || dropConfig ? "（含所选数据）" : "，数据与配置已保留"}`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy("");
+    }
+  };
+
   return (
     <div className="flex-1 h-full overflow-y-auto bg-black text-white p-7 select-none">
       <div className="max-w-[760px] space-y-4">
@@ -383,15 +457,67 @@ export function Plugins() {
             <h1 className="text-[20px] font-bold text-white tracking-tight">插件</h1>
             <p className="text-[13px] text-[#777777] mt-0.5">事件插件与出站能力；启停状态同时写入配置</p>
           </div>
-          <button
-            className="btn-pill-dark shrink-0"
-            disabled={busy !== ""}
-            onClick={() => void act("", "discover")}
-          >
-            <Icon.Refresh size={13} className="text-[#888888]" />
-            <span>重新扫描</span>
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              className="btn-pill-dark"
+              disabled={busy !== ""}
+              title="从本地目录安装插件包"
+              onClick={() => {
+                setInstallOpen(!installOpen);
+                setInstallIssues([]);
+              }}
+            >
+              <Icon.Plus size={13} className="text-[#888888]" />
+              <span>安装</span>
+            </button>
+            <button className="btn-pill-dark" disabled={busy !== ""} onClick={() => void act("", "discover")}>
+              <Icon.Refresh size={13} className="text-[#888888]" />
+              <span>重新扫描</span>
+            </button>
+          </div>
         </div>
+
+        {installOpen && (
+          <section className="sketch-card space-y-3 p-4">
+            <div>
+              <p className="text-[12.5px] text-[#cccccc]">插件目录的绝对路径</p>
+              <p className="mt-1 text-[11.5px] text-[#777777]">
+                目录里要有 <code className="font-mono">miubot.plugin.json</code> 与入口文件。
+                不支持压缩包，也不支持网页上传——把目录解压到本机，填路径即可。
+              </p>
+            </div>
+            <input
+              className="sketch-input w-full font-mono"
+              placeholder="D:\\plugins\\miubot.myplugin"
+              value={installPath}
+              onChange={(event) => setInstallPath(event.target.value)}
+            />
+            {installIssues.length > 0 && (
+              <ul className="space-y-1 rounded-lg border border-[rgba(239,68,68,0.25)] bg-[rgba(239,68,68,0.08)] p-2.5">
+                {installIssues.map((issue) => (
+                  <li key={`${issue.field}:${issue.message}`} className="font-mono text-[11.5px] text-[#f87171]">
+                    {issue.field}: {issue.message}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                className="btn-pill-dark"
+                disabled={busy !== ""}
+                onClick={() => {
+                  setInstallOpen(false);
+                  setInstallIssues([]);
+                }}
+              >
+                取消
+              </button>
+              <button className="btn-primary-white" disabled={busy !== ""} onClick={() => void install()}>
+                {busy === ":install" ? "安装中…" : "安装"}
+              </button>
+            </div>
+          </section>
+        )}
 
         {notice && (
           <div className="sketch-card p-3 text-[12.5px] text-[#f59e0b]">{notice}</div>
@@ -468,6 +594,21 @@ export function Plugins() {
                           {openConfig === plugin.id ? "收起" : "配置"}
                         </button>
                       )}
+                      {plugin.removable && (
+                        <button
+                          className="btn-pill-dark"
+                          disabled={pending}
+                          title="删除插件目录（数据与配置默认保留）"
+                          onClick={() => {
+                            setUninstalling(uninstalling === plugin.id ? "" : plugin.id);
+                            setDropData(false);
+                            setDropConfig(false);
+                          }}
+                        >
+                          <Icon.X size={12} className="text-[#f87171]" />
+                          <span>卸载</span>
+                        </button>
+                      )}
                     </>
                   )}
                 </div>
@@ -527,6 +668,37 @@ export function Plugins() {
                     void load().catch(() => undefined);
                   }}
                 />
+              )}
+
+              {uninstalling === plugin.id && (
+                <div className="space-y-2.5 rounded-lg border border-[rgba(239,68,68,0.25)] bg-[rgba(239,68,68,0.06)] p-3">
+                  <p className="text-[12.5px] text-[#f87171]">将删除插件目录，之后可以重新安装。</p>
+                  <p className="break-all font-mono text-[11px] text-[#888888]">{plugin.directory}</p>
+                  <label className="flex items-center gap-2 text-[12px] text-[#cccccc]">
+                    <input type="checkbox" checked={dropData} onChange={(event) => setDropData(event.target.checked)} />
+                    同时删除该插件的数据（{`plugin-data/${plugin.id}.json`}）
+                  </label>
+                  <label className="flex items-center gap-2 text-[12px] text-[#cccccc]">
+                    <input
+                      type="checkbox"
+                      checked={dropConfig}
+                      onChange={(event) => setDropConfig(event.target.checked)}
+                    />
+                    同时删除该插件的配置（{`plugin-config/${plugin.id}.json`}）
+                  </label>
+                  <div className="flex justify-end gap-2">
+                    <button className="btn-pill-dark" disabled={pending} onClick={() => setUninstalling("")}>
+                      取消
+                    </button>
+                    <button
+                      className="btn-primary-white"
+                      disabled={pending}
+                      onClick={() => void uninstall(plugin.id)}
+                    >
+                      {pending ? "卸载中…" : "确认卸载"}
+                    </button>
+                  </div>
+                </div>
               )}
             </section>
           );

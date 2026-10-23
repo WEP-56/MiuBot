@@ -1,5 +1,5 @@
 import { readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { createDeduplicator, type Deduplicator } from "@miubot/shared/platform/dedup";
 import type {
 	NormalizedPlatformEvent,
@@ -25,6 +25,7 @@ import {
 	type PluginExtensionFactory,
 	type PluginExtensionRegistry,
 } from "./extensions.ts";
+import { copyPackage, deletePackage, type InstallIssue, inspectPackage } from "./install.ts";
 import { createPluginLifecycle, type PluginLifecycle, type PluginLifecycleState } from "./lifecycle.ts";
 import { loadPluginEntry } from "./loader.ts";
 import { loadManifest, MANIFEST_FILE, type PluginManifest } from "./manifest.ts";
@@ -48,6 +49,10 @@ export type PluginStatus = {
 	extensions: string[];
 	/** manifest 是否声明了 `config`；工作台据此决定要不要显示「配置」按钮。 */
 	hasConfig: boolean;
+	/** 插件目录的绝对路径；内置目录与用户安装目录据此区分。 */
+	directory: string;
+	/** 是否可以卸载：内置插件随代码分发，只能从仓库里删。 */
+	removable: boolean;
 	/**
 	 * 条目来源。
 	 *
@@ -99,6 +104,20 @@ export type PluginHostDependencies = {
 		read(): Promise<Record<string, unknown>>;
 		write(values: PluginConfigValues): Promise<void>;
 	};
+	/**
+	 * 安装目标目录：本地插件包复制到这里。
+	 *
+	 * 单独声明而不是取 `pluginsDir` 的最后一个：内置目录在仓库里，装进去的东西会被 git
+	 * 看见、升级时被覆盖。缺省时 `install()` 直接报错，而不是猜一个位置写文件。
+	 */
+	installDir?: string;
+	/**
+	 * 删除插件的持久化资源（`uninstall` 用）。
+	 *
+	 * 文件布局由组合根决定，宿主只传「要不要删」：这样「保留数据但清掉配置」这类组合
+	 * 不需要宿主知道两个目录分别在哪。
+	 */
+	deleteAssets?: (pluginId: string, options: { data: boolean; config: boolean }) => Promise<void>;
 	logger: PluginLogger;
 	/** 未在 manifest 声明 `bots` 时的默认 Bot 范围。 */
 	defaultBotIds?: string[];
@@ -268,6 +287,27 @@ export function createPluginHost(deps: PluginHostDependencies) {
 		};
 	}
 
+	/**
+	 * 插件目录是否位于可写安装目录内。
+	 *
+	 * 用 `relative` 判断而不是字符串前缀：`.../plugins-evil` 以 `.../plugins` 开头，
+	 * 前缀比较会把它误判成子目录。
+	 */
+	function isInstalledDirectory(directory: string): boolean {
+		if (!deps.installDir) return false;
+		const relativePath = relative(resolve(deps.installDir), resolve(directory));
+		return Boolean(relativePath) && !relativePath.startsWith("..") && !isAbsolute(relativePath);
+	}
+
+	async function pathExists(path: string): Promise<boolean> {
+		try {
+			await stat(path);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
 	function statusOf(entry: PluginEntry): PluginStatus {
 		return {
 			id: entry.manifest.id,
@@ -281,6 +321,8 @@ export function createPluginHost(deps: PluginHostDependencies) {
 			tools: tools.namesOf(entry.manifest.id),
 			extensions: extensions.namesOf(entry.manifest.id),
 			hasConfig: entry.manifest.config !== undefined,
+			directory: entry.directory,
+			removable: entry.source === "plugin" && isInstalledDirectory(entry.directory),
 			source: entry.source,
 		};
 	}
@@ -646,6 +688,100 @@ export function createPluginHost(deps: PluginHostDependencies) {
 		return validated;
 	}
 
+	/**
+	 * 安装一个本地插件包。
+	 *
+	 * 校验（manifest、入口存在、无符号链接、体积上限）在 `inspectPackage` 里做，这里只负责
+	 * 「装到哪、会不会撞车」。**装完不启动**：起不起来取决于配置里的白名单与 `disabled`，
+	 * 那是管理面的策略，由调用方在同一次请求里决定——宿主自己启动会造出「配置里禁用、
+	 * 却跑着的实例」，下次重启就消失。
+	 *
+	 * 同样**不覆盖已存在的插件**：升级要先卸载，否则一次手滑就把在用的插件换成半成品。
+	 */
+	async function install(
+		sourceDir: string,
+	): Promise<{ ok: true; status: PluginStatus } | { ok: false; issues: InstallIssue[] }> {
+		if (!deps.installDir) {
+			return { ok: false, issues: [{ field: "installDir", message: "宿主未配置可写插件目录，无法安装" }] };
+		}
+		const inspected = await inspectPackage(sourceDir);
+		if (!inspected.ok) return inspected;
+
+		const { id } = inspected.manifest;
+		const existing = entries.get(id);
+		if (existing) {
+			// 内置同名插件也走这里：装上去了也会被 discover 的「首个目录优先」压住，
+			// 表现为「装成功了却看不到」，不如直接说明冲突。
+			return { ok: false, issues: [{ field: "id", message: `插件 ${id} 已存在：${existing.directory}` }] };
+		}
+		const target = join(resolve(deps.installDir), id);
+		// 目录可能已存在但 manifest 是坏的（因此没被登记成合法插件），此时同样不能覆盖。
+		if (await pathExists(target)) {
+			return { ok: false, issues: [{ field: "id", message: `目标目录已存在：${target}` }] };
+		}
+
+		try {
+			await copyPackage(sourceDir, target);
+		} catch (error) {
+			return {
+				ok: false,
+				issues: [{ field: "$", message: `复制失败：${error instanceof Error ? error.message : String(error)}` }],
+			};
+		}
+
+		await discover();
+		const status = get(id);
+		if (!status) {
+			return { ok: false, issues: [{ field: "$", message: "复制完成但未能登记，请重新扫描" }] };
+		}
+		deps.logger.info(`插件已安装：${id}（来自 ${sourceDir}）`);
+		return { ok: true, status };
+	}
+
+	/**
+	 * 卸载一个已安装的插件。
+	 *
+	 * 顺序：先停（撤销能力），再删目录，最后删资源。反过来会留下一个「目录没了但条目还在」
+	 * 的僵尸状态，用户得重启服务才能清掉。
+	 *
+	 * 数据与配置**默认都保留**：删代码是明确的，删用户数据不是。两者要分别显式要求。
+	 */
+	async function uninstall(
+		id: string,
+		options: { deleteData?: boolean; deleteConfig?: boolean } = {},
+	): Promise<
+		{ ok: true; directory: string; dataDeleted: boolean; configDeleted: boolean } | { ok: false; message: string }
+	> {
+		const entry = entries.get(id);
+		if (!entry) return { ok: false, message: "插件不存在" };
+		if (entry.source !== "plugin") return { ok: false, message: "该条目不是可安装的插件" };
+		if (!isInstalledDirectory(entry.directory)) {
+			return { ok: false, message: "内置插件随代码分发，只能在仓库中删除" };
+		}
+
+		await stop(id);
+		try {
+			await deletePackage(entry.directory);
+		} catch (error) {
+			// 删不掉就把条目留着，用户还能重试；删了一半的状态比「什么都没删」更难收拾。
+			return {
+				ok: false,
+				message: `删除插件目录失败：${error instanceof Error ? error.message : String(error)}`,
+			};
+		}
+
+		const dataDeleted = options.deleteData === true;
+		const configDeleted = options.deleteConfig === true;
+		if (deps.deleteAssets && (dataDeleted || configDeleted)) {
+			await deps.deleteAssets(id, { data: dataDeleted, config: configDeleted });
+		}
+
+		entries.delete(id);
+		if (eventHandlers.size === 0) releaseSubscription();
+		deps.logger.info(`插件已卸载：${id}`);
+		return { ok: true, directory: entry.directory, dataDeleted, configDeleted };
+	}
+
 	return {
 		discover,
 		start,
@@ -673,6 +809,8 @@ export function createPluginHost(deps: PluginHostDependencies) {
 			inspect: inspectConfig,
 			save: saveConfig,
 		},
+		install,
+		uninstall,
 		/**
 		 * 是否存在订阅了该事件类型的启用插件。
 		 *

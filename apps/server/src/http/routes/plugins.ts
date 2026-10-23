@@ -48,6 +48,34 @@ export async function handlePluginRoutes(
 	}
 
 	/**
+	 * 从本地目录安装插件包。
+	 *
+	 * 只接受磁盘上已解压的目录（不做网页上传 / zip / 远程下载）：管理员就在这台机器上，
+	 * 而解压需要额外依赖。全部校验在宿主侧完成，这里只翻译结果。
+	 */
+	if (url.pathname === "/api/plugins/install" && req.method === "POST") {
+		const payload = await body(req);
+		const sourceDir = typeof payload.path === "string" ? payload.path.trim() : "";
+		if (!sourceDir) {
+			json(res, 400, { ok: false, message: "path 必须是插件目录的绝对路径" });
+			return true;
+		}
+		const installed = await ctx.plugins.install(sourceDir);
+		if (!installed.ok) {
+			json(res, 400, { ok: false, message: "插件包未通过校验", issues: installed.issues });
+			return true;
+		}
+		// 装完由这里决定起不起来：宿主不读配置，配置策略只活在管理面。
+		const settings = ctx.config.get().plugins;
+		const allowed = isAllowedByConfig(settings, installed.status);
+		if (allowed) await ctx.plugins.start(installed.status.id);
+		// 新插件的工具要进已有会话，否则要等会话自然过期才生效。
+		if (allowed) ctx.agentHost.rebuildAgentSessions();
+		json(res, 200, { ok: true, installed: installed.status.id, started: allowed, ...snapshot(ctx) });
+		return true;
+	}
+
+	/**
 	 * Schema Config：`GET` 取 schema 与当前值，`PUT` 保存并让运行中的插件重新读取。
 	 *
 	 * 配置在插件 `setup()` 时读取，因此改完必须重启插件才生效。这里只重启**本来就在运行**
@@ -112,6 +140,42 @@ export async function handlePluginRoutes(
 		// 回读而不是回显 `saved.values`：后者含 secret 明文。
 		const config = await ctx.plugins.config.inspect(id);
 		json(res, 200, { ok: true, id, restarted, ...config });
+		return true;
+	}
+
+	/**
+	 * 卸载：停用 → 删插件目录 → 清配置 → 从登记表移除。
+	 *
+	 * 数据与配置默认保留。删代码是明确动作，删用户数据不是；要删必须显式勾选，
+	 * 而且要分开勾——「保留数据但清掉配置」是合理需求。
+	 */
+	const uninstallAction = url.pathname.match(/^\/api\/plugins\/([^/]+)\/uninstall$/);
+	if (uninstallAction && req.method === "POST") {
+		const id = decodeURIComponent(uninstallAction[1]!);
+		if (!ctx.plugins.get(id)) {
+			json(res, 404, { ok: false, message: "插件不存在" });
+			return true;
+		}
+		const payload = await body(req);
+		const removed = await ctx.plugins.uninstall(id, {
+			deleteData: payload.deleteData === true,
+			deleteConfig: payload.deleteConfig === true,
+		});
+		if (!removed.ok) {
+			json(res, 400, { ok: false, message: removed.message });
+			return true;
+		}
+		// 配置里的 enabled / disabled 必须一起清，否则会留下一个永远不存在的 id。
+		const settings = ctx.config.get().plugins;
+		const enabled = settings.enabled.filter((item) => item !== id);
+		const disabled = settings.disabled.filter((item) => item !== id);
+		if (enabled.length !== settings.enabled.length || disabled.length !== settings.disabled.length) {
+			settings.enabled = enabled;
+			settings.disabled = disabled;
+			await ctx.config.save();
+		}
+		ctx.agentHost.rebuildAgentSessions();
+		json(res, 200, { ok: true, removed: removed.directory, ...snapshot(ctx) });
 		return true;
 	}
 
