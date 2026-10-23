@@ -76,6 +76,9 @@
 | 错误响应 | `HttpError` 按状态码回；其余 500 只回 `traceId`，详情进运行日志 | ✅ P1-6 |
 | 守护 | `deploy/miubot.service` + SIGTERM 优雅退出（断 Gateway → 关端口 → 落盘） | ✅ P1-7 |
 | 备份 | `deploy/backup.sh`（tar + 权限收紧 + 14 天轮转） | ✅ P1-8 |
+| 审计日志 | `audit.log`（JSON Lines，10 MB × 3）：登录/失败/锁定/登出/改密 + 所有变更类管理请求，统一在 `http/server.ts` 埋点 | ✅ P2-4 |
+| 入站白名单 | `config.access.allowedPeers`（`group:<ID>` / `c2c:<ID>`）；未命中的消息在副作用之前丢弃、不回复；`MIUBOT_ALLOWED_PEERS` 可覆盖 | ✅ P2-1 |
+| 工具策略 | 文件与命令类工具启用时启动 WARN + Tools 页红字；`MIUBOT_DISABLE_NATIVE_TOOLS=1` 在会话层整体禁用 | ✅ P2-2 |
 
 ### 2.4 执行面（部署文档必须讲清楚的部分）
 
@@ -168,12 +171,12 @@ if (url.pathname === "/api/auth/session" && req.method === "POST") {
 | P1-7 | systemd unit + 优雅退出 | ✅ `deploy/miubot.service`、`index.ts` |
 | P1-8 | 备份脚本 | ✅ `deploy/backup.sh` |
 
-### P2：上线后按需
+### P2：上线后按需 —— 3/5 完成
 
-- 审计日志：谁（session）在何时改了配置 / 装了插件 / 开了工具。
-- 入站对象白名单（`allowedPeers` / 群黑白名单），控制「谁能用这个 Bot」。
-- 公网模式下的工具策略：默认禁 `bash` / `powershell` / `write` / `edit` / `read`，需要时显式开启并记审计。
-- 插件/技能导入在公网模式下默认关闭（`MIUBOT_ALLOW_REMOTE_INSTALL=0`）。
+- ✅ **审计日志**：`audit.ts` + `http/server.ts` 统一埋点，`GET /api/audit`，工作台「运行日志 → 审计日志」。
+- ✅ **入站对象白名单**：`config.access.allowedPeers`（`group:<ID>` / `c2c:<ID>`），空 = 不限制；工作台设置页可编辑，也可从「已出现过的会话」一键加入。
+- ✅ **工具策略**：文件与命令类工具启用时启动 WARN + Tools 页红字提示；`MIUBOT_DISABLE_NATIVE_TOOLS=1` 在 `agent-host.enabledToolNames()` 里整体过滤，配置里勾了也不生效。
+- 插件/技能导入在公网模式下默认关闭（`MIUBOT_ALLOW_REMOTE_INSTALL=0`）——未做。注意插件导入本身就是「服务器任意代码执行」，和工具策略同级。
 - 多用户与角色（届时才需要方案 C）。
 
 ## 6. 部署参考
@@ -221,9 +224,15 @@ if (url.pathname === "/api/auth/session" && req.method === "POST") {
 | 口令错误 ×5 | 第 5 次起 429 + `Retry-After: 300`；锁定期内正确口令也 429 |
 | 首启动（无口令环境变量） | 日志打印一次随机口令，`admin-password` 只存散列；二次启动不再打印 |
 | `admin-sessions.json` 内容 | 只有 SHA-256 与时间戳，无会话原值 |
+| `GET /api/access` 初始 | `{"allowedPeers":[],"source":"config"}` |
+| `PUT /api/access` 合法键 | 200，回写去重后的列表；`PUT` 非法键（`123456`）→ 400 |
+| 设 `MIUBOT_ALLOWED_PEERS=group:999, bogus-entry` 重启 | 启动日志 `入站白名单：1 个会话（来自 MIUBOT_ALLOWED_PEERS）` + WARN 忽略 `bogus-entry`；`GET /api/access` 回 `source: "env"`，`PUT` → 409 |
+| 未配白名单启动 | 启动日志 WARN「任何群、任何私聊都能触发 Agent」 |
+| `GET /api/audit` | 依次出现 `auth.login`、`api.mutation PUT /api/access → 200`、`→ 400` |
+| 审计文件 | `audit.log` 为 JSON Lines，密钥被 `redact` 打码 |
 
-单测：`apps/server/test/auth.test.ts`（18 项）、`response.test.ts`（9 项）、`http-server.test.ts`（14 项，真实 HTTP server + 真实 auth）、`storage.test.ts`（6 项）、`logging.test.ts`（11 项）、`version.test.ts`（10 项）、`update-check.test.ts`（10 项），重写 `api-security.test.ts`。
-全量 `npm test`：199 files / 1952 tests 通过。
+单测：`apps/server/test/auth.test.ts`（18 项）、`response.test.ts`（9 项）、`http-server.test.ts`（18 项，真实 HTTP server + 真实 auth）、`storage.test.ts`（6 项）、`logging.test.ts`（11 项）、`audit.test.ts`（4 项）、`version.test.ts`（10 项）、`update-check.test.ts`（10 项），重写 `api-security.test.ts`；`qq-inbound.test.ts` 补了白名单两条用例。
+全量 `npm test`：200 files / 1962 tests 通过。
 
 **Linux 上还需人工确认一次**（Windows 验不了）：
 
@@ -245,8 +254,8 @@ if (url.pathname === "/api/auth/session" && req.method === "POST") {
 
 | 文件 | 触发 | 做什么 |
 |---|---|---|
-| `ci.yml` | push / PR / 被 release 复用 | `npm ci --ignore-scripts` → 生成模型目录 → `check` / `lint` / `test` → 构建工作台 + 工作台类型检查 |
-| `release.yml` | 推 `v*` tag | 先跑同一套门禁，再 ①构建并推 `ghcr.io/<owner>/<repo>:<version|major.minor|latest>`（仅 amd64）②打 `miubot-v<version>.tar.gz`（源码 + 预构建工作台 + 已生成模型目录）③创建 GitHub Release |
+| `ci.yml` | push / PR / 被 release 复用 | `npm ci --ignore-scripts` → 校验模型目录快照 → `check` / `lint` / `test` → 构建工作台 + 工作台类型检查 |
+| `release.yml` | 推 `v*` tag | 先跑同一套门禁，再 ①构建并推 `ghcr.io/<owner>/<repo>:<version|major.minor|latest>`（amd64 + arm64 manifest list，arm64 走 QEMU）②打 `miubot-v<version>.tar.gz`（源码 + 预构建工作台 + 已生成模型目录）③创建 GitHub Release |
 
 **版本号**（`apps/server/src/version.ts`）优先级：`MIUBOT_VERSION`（CI 用 `--build-arg` 注入镜像）→ 仓库根 `VERSION` 文件（发布包自带）→ `package.json`。都拿不到时是 `0.0.0-dev`，工作台据此显示开发版。
 
@@ -262,8 +271,9 @@ if (url.pathname === "/api/auth/session" && req.method === "POST") {
 
 按风险从高到低：
 
-1. **入站对象白名单**（P2 里最该先做）：现在任何群、任何私聊都能触发 Agent 与工具。`allowedPeers` 是「谁能用这个 Bot」的唯一执行点。
-2. **公网模式下的工具策略**：默认禁 `bash` / `write` / `edit` / `read`，开启时记审计。这是「提示注入 = RCE」那条链上唯一能改的一环。
-3. **审计日志**：有了 session 身份之后，记录「谁在何时改配置 / 装插件 / 开工具」才成立。
-4. 插件/技能导入在公网模式下默认关闭。
-5. 镜像补 arm64（现在是 amd64；ARM 机器本地 `--build`）。
+1. **插件/技能导入在公网模式下默认关闭**（`MIUBOT_ALLOW_REMOTE_INSTALL=0`）。这是剩下最重的一条：
+   导入插件等于在服务器上跑任意 Node 代码，危险级别和 `bash` 工具相同，但目前只要有管理员会话就能做。
+2. **审计日志补上「改了什么」**：现在记的是 `PUT /api/config → 200`，够定位是谁动的，但看不出改了哪几项。
+   下一步可以在变更前后做一次字段级 diff（脱敏后入库）。
+3. **会话级限流**：现在限速按来源 IP，公网多用户场景下应该按「群 / 用户」再限一层，防止单个群刷爆额度。
+4. 多用户与角色（届时才需要方案 C）。

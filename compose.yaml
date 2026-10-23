@@ -40,6 +40,10 @@ services:
       # 更新检查：留空 = 开启（每 6 小时问一次 GitHub 公开 API，不带标识）；0 = 完全不出站。
       MIUBOT_UPDATE_CHECK: ${MIUBOT_UPDATE_CHECK:-}
       MIUBOT_UPDATE_REPO: ${MIUBOT_UPDATE_REPO:-}
+      # 入站白名单：留空 = 不限制（任何人都能触发 Agent）；填了就只有列出的会话能用。
+      MIUBOT_ALLOWED_PEERS: ${MIUBOT_ALLOWED_PEERS:-}
+      # 1 = 整体禁用文件与命令类工具（bash/write/edit/read…），公网部署的保险丝。
+      MIUBOT_DISABLE_NATIVE_TOOLS: ${MIUBOT_DISABLE_NATIVE_TOOLS:-}
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
       # 具名卷：权限由镜像里的 /var/lib/miubot 继承，不需要在宿主机 chown。

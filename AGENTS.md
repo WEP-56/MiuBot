@@ -26,7 +26,7 @@ packages/
 - 服务端说明与启动：`apps/server/README.md`；`apps/server/src/index.ts` 是进程入口与组合根，只做装配与启动，不再承载路由或业务流程分支。
 - 服务端模块边界（`apps/server/src/`）：
   - `http/` 管理 API：`server.ts`（CORS + `api-security` 校验 + 404/500 边界）、`router.ts`（路由表，顺序即优先级）、`routes/*.ts`（按域拆分）、`context.ts`（路由依赖的运行时状态访问器）、`response.ts` / `present.ts`。
-  - `app-state.ts` 配置/会话/对象配置的内存状态与持久化；`logging.ts` 运行日志（轮转 + 脱敏）；`api-security.ts` 请求边界（Host / Origin / 凭据）；`auth.ts` 管理员口令与可撤销会话；`storage.ts` 原子写与文件权限；`version.ts` 版本号；`update-check.ts` 内置更新检查（只提示，不自动升级）。
+  - `app-state.ts` 配置/会话/对象配置的内存状态与持久化；`logging.ts` 运行日志（轮转 + 脱敏）；`audit.ts` 审计日志（登录/改密/变更类请求）；`rotating-writer.ts` 有上限的追加写入器（两者共用）；`api-security.ts` 请求边界（Host / Origin / 凭据）；`auth.ts` 管理员口令与可撤销会话；`storage.ts` 原子写与文件权限；`peer-key.ts` 入站白名单键；`version.ts` 版本号；`update-check.ts` 内置更新检查（只提示，不自动升级）。
   - `qq/connection.ts` 连接、扫码、连接状态；`qq/inbound.ts` 入站消息主流程；`proactive.ts` 群聊插话；`sticker-tagging.ts` 表情包自动打标。
   - `agent-host.ts` 装配 AgentSession、扩展与工具授权；`runtime.ts` 配置类型、默认值与通用模型请求；`platform/` 平台契约与 QQ 适配。
 - Web 工作台说明与启动：`apps/web/README.md`；React 入口是 `apps/web/src/App.tsx`

@@ -75,6 +75,8 @@ sudo editor /etc/miubot/miubot.env     # 至少改 MIUBOT_ALLOWED_HOSTS
 | `MIUBOT_VERSION` | 空 | 版本号覆盖；发布包自带 `VERSION` 文件，通常不用配 |
 | `MIUBOT_UPDATE_CHECK` | 开 | 内置更新检查（每 6 小时问一次 GitHub 公开 API，只提示不升级）；设 `0` 完全不出站 |
 | `MIUBOT_UPDATE_REPO` | `WEP-56/MiuBot` | fork 后改这里，检查自己的仓库 |
+| `MIUBOT_ALLOWED_PEERS` | 空 | 入站白名单（`group:<群 ID>` / `c2c:<用户 ID>`）。空 = 不限制，公网务必填 |
+| `MIUBOT_DISABLE_NATIVE_TOOLS` | 空 | `1` = 整体禁用 `read`/`bash`/`edit`/`write` 等文件与命令类工具 |
 
 ## 3. systemd
 

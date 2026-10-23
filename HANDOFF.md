@@ -43,11 +43,14 @@
 | 运行日志：10 MB × 5 轮转 + 写入前脱敏（密钥/令牌/长 base64）+ 单条截断 2000 字符 + 跨文件恢复 | `logging.ts`、`index.ts`（生成口令改为只写进程输出） |
 | 版本号：`MIUBOT_VERSION` → 根 `VERSION` 文件 → `package.json`，`0.0.0-dev` 兜底 | `version.ts`（新） |
 | 内置更新检查：GitHub Releases，6h 缓存、5s 超时、并发合并、`MIUBOT_UPDATE_CHECK=0` 可关；只提示不自动升级 | `update-check.ts`（新）、`routes/system.ts`、设置页 |
-| CI / Release：tag → 门禁 → GHCR 镜像（amd64）+ 源码包（含预构建工作台）+ GitHub Release | `.github/workflows/ci.yml`、`release.yml`（新） |
+| CI / Release：tag → 门禁 → GHCR 镜像（amd64 + arm64）+ 源码包（含预构建工作台）+ GitHub Release | `.github/workflows/ci.yml`、`release.yml`（新） |
+| 入站白名单：`group:<ID>` / `c2c:<ID>`，未命中的消息在副作用之前丢弃；`MIUBOT_ALLOWED_PEERS` 覆盖，工作台设置页可编辑 | `runtime.ts`、`qq/inbound.ts`、`http/routes/access.ts`、`peer-key.ts`（新）、`Advanced.tsx` |
+| 工具策略：文件与命令类工具启用时启动 WARN + Tools 页红字；`MIUBOT_DISABLE_NATIVE_TOOLS=1` 在会话层整体禁用 | `index.ts`、`agent-host.ts`、`tool-names.ts`、`present.ts`、`Advanced.tsx` |
+| 审计日志：`audit.log`（JSON Lines，10 MB × 3），登录/登出/改密 + 所有变更类管理请求，`GET /api/audit`，工作台日志页分页签 | `audit.ts`（新）、`rotating-writer.ts`（新，从 `logging.ts` 抽出）、`auth.ts`、`http/server.ts`、`Advanced.tsx` |
 
-单测新增 `apps/server/test/auth.test.ts`（18 项）、`response.test.ts`（9 项）、`storage.test.ts`（6 项）、`logging.test.ts`（11 项）、`version.test.ts`（10 项）、`update-check.test.ts`（10 项）、`http-server.test.ts`（14 项，真实 HTTP server + 真实 auth），重写 `api-security.test.ts`。全量 199 files / 1952 tests 通过；验收矩阵见 `deploy.md §7`（真实起进程跑过：Host 伪造 403、无凭据 401、旧后门 401、登录/登出、413/400、锁定 429、首启动口令只打印一次、会话文件只存 SHA-256；`/api/health` 带 `version`、`/api/system/update` 在 GitHub 403 时返回结构化错误而不是抛错）。已按 §九 做反向验证：去掉会话校验 → `api-security` + `http-server` 的伪造 Cookie 用例转红；去掉 body 流式上限 → `response` 两条用例转红。
+单测新增 `apps/server/test/auth.test.ts`（18 项）、`response.test.ts`（9 项）、`storage.test.ts`（6 项）、`logging.test.ts`（11 项）、`audit.test.ts`（4 项）、`version.test.ts`（10 项）、`update-check.test.ts`（10 项）、`http-server.test.ts`（18 项，真实 HTTP server + 真实 auth），重写 `api-security.test.ts`；`qq-inbound.test.ts` 补了入站白名单两条用例。全量 200 files / 1962 tests 通过；验收矩阵见 `deploy.md §7`（真实起进程跑过：Host 伪造 403、无凭据 401、旧后门 401、登录/登出、413/400、锁定 429、首启动口令只打印一次、会话文件只存 SHA-256；`/api/health` 带 `version`、`/api/system/update` 在 GitHub 403 时返回结构化错误而不是抛错；`/api/access` 的增删改与 env 只读、`/api/audit` 的记录顺序）。已按 §九 做反向验证：去掉会话校验 → `api-security` + `http-server` 的伪造 Cookie 用例转红；去掉 body 流式上限 → `response` 两条用例转红；去掉白名单判定 → `qq-inbound` 的越权用例转红；去掉日志脱敏 → `logging` 两条用例转红。
 
-**仍未做**：入站对象白名单、公网工具策略、审计日志；发布镜像只有 amd64（ARM 机器本地 `--build`）。见 `deploy.md §10`。
+**仍未做**：插件/技能导入在公网模式下默认关闭、审计记录字段级 diff、会话级限流、多用户。见 `deploy.md §10`。
 
 **Docker 相关文件未在开发机验证**（本机没有 Docker）：`Dockerfile` / `compose.yaml` / `.dockerignore` 只做过 YAML 解析与逻辑审查。首次在真机 `docker compose build` 时要重点看三处——`npm ci` 是否只靠 package.json 完成、`npm prune --omit=dev` 是否把运行期依赖剪掉、容器内 `--conditions=source` 能否解析 workspace 源码（本地 Windows 上已验证同样的解析路径）。
 
