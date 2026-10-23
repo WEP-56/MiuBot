@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createPluginHost, type PluginHost } from "@miubot/plugin/host/index";
+import { createFilePluginConfig } from "@miubot/plugin/host/config";
 import { createFileStorage } from "@miubot/plugin/host/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDefaultConfig, type AppConfig } from "../src/runtime.ts";
@@ -30,7 +31,7 @@ async function harness(): Promise<{
 	saved: () => number;
 	rebuilds: () => number;
 	host: PluginHost;
-	call: (method: string, path: string) => Promise<Call>;
+	call: (method: string, path: string, payload?: unknown) => Promise<Call>;
 }> {
 	const root = await mkdtemp(join(tmpdir(), "miubot-plugins-api-"));
 	roots.push(root);
@@ -42,6 +43,7 @@ async function harness(): Promise<{
 		eventSource: { subscribe: () => () => undefined },
 		sendMessage: vi.fn().mockResolvedValue(undefined),
 		storageFor: (pluginId) => createFileStorage({ root: join(root, "storage"), pluginId }),
+		configFor: (pluginId) => createFilePluginConfig({ root: join(root, "config"), pluginId }),
 		logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 	});
 
@@ -65,6 +67,7 @@ async function harness(): Promise<{
 			start: host.start,
 			stop: host.stop,
 			reload: host.reload,
+			config: { inspect: host.config.inspect, save: host.config.save },
 			directories: [pluginsDir],
 		},
 	} as unknown as HttpContext;
@@ -76,11 +79,19 @@ async function harness(): Promise<{
 		config,
 		saved: () => saveCount,
 		rebuilds: () => rebuildAgentSessions.mock.calls.length,
-		call: async (method, path) => {
+		call: async (method, path, requestBody) => {
 			const url = new URL(path, "http://127.0.0.1");
-			const req = { method, url: path, headers: {} } as IncomingMessage;
+			// 请求体按需变成异步可迭代对象，让路由里的 `body()` 能正常读出 JSON。
+			const req = {
+				method,
+				url: path,
+				headers: {},
+				async *[Symbol.asyncIterator]() {
+					if (requestBody !== undefined) yield Buffer.from(JSON.stringify(requestBody));
+				},
+			} as unknown as IncomingMessage;
 			let status = 0;
-			let payload = "";
+			let responseBody = "";
 			const res = {
 				writeHead: (code: number) => {
 					status = code;
@@ -88,12 +99,12 @@ async function harness(): Promise<{
 				},
 				setHeader: () => res,
 				end: (chunk?: string) => {
-					payload = chunk ?? "";
+					responseBody = chunk ?? "";
 				},
 			} as unknown as ServerResponse;
 			const handled = await handlePluginRoutes(ctx, req, res, url);
 			if (!handled) throw new Error(`路由未处理：${method} ${path}`);
-			return { status, body: payload ? (JSON.parse(payload) as Record<string, unknown>) : {} };
+			return { status, body: responseBody ? (JSON.parse(responseBody) as Record<string, unknown>) : {} };
 		},
 	};
 }
@@ -315,6 +326,139 @@ describe("POST /api/plugins/:id/reload", () => {
 		expect(h.host.get("demo.one")?.state).toBe("inactive");
 	});
 });
+
+describe("GET /api/plugins/:id/config", () => {
+	const config = {
+		type: "object",
+		properties: {
+			welcomeText: { type: "string", title: "欢迎语", default: "默认欢迎", maxLength: 20 },
+			apiKey: { type: "string", secret: true },
+		},
+		required: ["welcomeText"],
+	};
+
+	it("返回 schema 与补齐默认值的当前值", async () => {
+		const h = await harness();
+		await writePlugin(h.pluginsDir, "demo.cfg", { config });
+		await h.host.discover();
+
+		const response = await h.call("GET", "/api/plugins/demo.cfg/config");
+		expect(response.status).toBe(200);
+		expect(response.body.values).toEqual({ welcomeText: "默认欢迎" });
+		expect((response.body.schema as { properties: Record<string, unknown> }).properties.welcomeText).toBeDefined();
+	});
+
+	it("没有声明 config 的插件返回空 schema", async () => {
+		const h = await harness();
+		await writePlugin(h.pluginsDir, "demo.plain");
+		await h.host.discover();
+
+		const response = await h.call("GET", "/api/plugins/demo.plain/config");
+		expect(response.status).toBe(200);
+		expect(response.body.schema).toBeUndefined();
+	});
+
+	it("未知插件返回 404", async () => {
+		const h = await harness();
+		const response = await h.call("GET", "/api/plugins/nope/config");
+		expect(response.status).toBe(404);
+	});
+});
+
+describe("PUT /api/plugins/:id/config", () => {
+	const config = {
+		type: "object",
+		properties: {
+			welcomeText: { type: "string", title: "欢迎语", default: "默认欢迎", maxLength: 20 },
+			apiKey: { type: "string", secret: true },
+		},
+		required: ["welcomeText"],
+	};
+
+	it("保存合法配置并让运行中的插件重新读取", async () => {
+		const h = await harness();
+		await writePlugin(h.pluginsDir, "demo.cfg", { config });
+		await h.host.discover();
+		await h.host.start("demo.cfg");
+
+		const response = await h.call("PUT", "/api/plugins/demo.cfg/config", {
+			values: { welcomeText: "改过的欢迎语" },
+		});
+		expect(response.status).toBe(200);
+		expect(response.body.restarted).toBe(true);
+		expect(response.body.values).toEqual({ welcomeText: "改过的欢迎语" });
+		// 重启会让插件工具以新代次重新注册；不重建会话的话，旧会话里的定义会被判失效。
+		expect(h.rebuilds()).toBeGreaterThan(0);
+
+		// 回读也应该是新值：配置已经落盘，不是只改了内存。
+		const reread = await h.call("GET", "/api/plugins/demo.cfg/config");
+		expect(reread.body.values).toEqual({ welcomeText: "改过的欢迎语" });
+	});
+
+	it("不把 secret 真值回显到响应里", async () => {
+		const h = await harness();
+		await writePlugin(h.pluginsDir, "demo.cfg", { config });
+		await h.host.discover();
+		await h.host.start("demo.cfg");
+
+		const response = await h.call("PUT", "/api/plugins/demo.cfg/config", {
+			values: { welcomeText: "ok", apiKey: "sk-secret" },
+		});
+		expect(response.body.values).toEqual({ welcomeText: "ok" });
+		expect(response.body.secretKeys).toEqual(["apiKey"]);
+		expect(JSON.stringify(response.body)).not.toContain("sk-secret");
+	});
+
+	it("校验失败时逐字段返回问题，且不落盘", async () => {
+		const h = await harness();
+		await writePlugin(h.pluginsDir, "demo.cfg", { config });
+		await h.host.discover();
+		await h.host.start("demo.cfg");
+
+		const response = await h.call("PUT", "/api/plugins/demo.cfg/config", {
+			values: { welcomeText: "长".repeat(30) },
+		});
+		expect(response.status).toBe(400);
+		expect(response.body.issues).toContainEqual(expect.objectContaining({ field: "welcomeText" }));
+
+		const reread = await h.call("GET", "/api/plugins/demo.cfg/config");
+		expect(reread.body.values).toEqual({ welcomeText: "默认欢迎" });
+	});
+
+	it("values 不是对象时返回 400", async () => {
+		const h = await harness();
+		await writePlugin(h.pluginsDir, "demo.cfg", { config });
+		await h.host.discover();
+
+		const response = await h.call("PUT", "/api/plugins/demo.cfg/config", { values: "nope" });
+		expect(response.status).toBe(400);
+	});
+
+	it("已停用的插件只保存配置、不自行启动", async () => {
+		const h = await harness();
+		await writePlugin(h.pluginsDir, "demo.cfg", { config });
+		await h.host.discover();
+		h.config.plugins.disabled = ["demo.cfg"];
+
+		const response = await h.call("PUT", "/api/plugins/demo.cfg/config", {
+			values: { welcomeText: "先存着" },
+		});
+		expect(response.status).toBe(200);
+		expect(response.body.restarted).toBe(false);
+		// 下次启动时会读到新值；但保存动作不能让它越过 disabled 自己起来。
+		expect(h.host.get("demo.cfg")?.state).toBe("inactive");
+	});
+
+	it("未声明 config 的插件拒绝保存", async () => {
+		const h = await harness();
+		await writePlugin(h.pluginsDir, "demo.plain");
+		await h.host.discover();
+
+		const response = await h.call("PUT", "/api/plugins/demo.plain/config", { values: { a: 1 } });
+		expect(response.status).toBe(400);
+		expect(String(response.body.message)).toContain("config");	});
+});
+
 
 describe("错误边界", () => {
 	it("未知插件返回 404", async () => {

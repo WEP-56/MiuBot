@@ -2,7 +2,12 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createFileStorage, createPluginHost, type PluginHost } from "@miubot/plugin/host/index";
+import {
+	createFilePluginConfig,
+	createFileStorage,
+	createPluginHost,
+	type PluginHost,
+} from "@miubot/plugin/host/index";
 import { McpRuntime } from "@miubot/plugin/tools/index";
 import { createAgentHost } from "./agent-host.ts";
 import { createApiSecurity, loadOrCreateAuthToken } from "./api-security.ts";
@@ -38,6 +43,11 @@ const pluginsDir = join(dataDir, "plugins");
 const builtinPluginsDir = join(root, "..", "..", "plugins");
 /** 插件存储命名空间根目录；每个插件一个 JSON 文件。 */
 const pluginStorageDir = join(dataDir, "plugin-data");
+/**
+ * 插件配置目录，与 `plugin-data/` 分开：配置是管理员填的少量设置，数据是插件的业务状态。
+ * 卸载插件时「保留数据」不该顺手保住配置（反之亦然），所以从目录上就分开。
+ */
+const pluginConfigDir = join(dataDir, "plugin-config");
 const port = Number(process.env.MIUBOT_PORT ?? 8787);
 /** 管理 API 令牌文件：只有本机进程可读，浏览器通过 HttpOnly Cookie 使用它。 */
 const authTokenPath = join(dataDir, "api-token");
@@ -91,6 +101,7 @@ const pluginHost: PluginHost = createPluginHost({
 		inboundReferences,
 	),
 	storageFor: (pluginId) => createFileStorage({ root: pluginStorageDir, pluginId }),
+	configFor: (pluginId) => createFilePluginConfig({ root: pluginConfigDir, pluginId }),
 	logger: createPluginLogger((level, text) => log(level, text)),
 	// 插件工具不能覆盖内置 / MCP 工具：同名会让模型「以为在调内置工具、实际跑了插件代码」。
 	reservedToolNames: () => [
@@ -177,6 +188,7 @@ const httpContext: HttpContext = {
 		start: pluginHost.start,
 		stop: pluginHost.stop,
 		reload: pluginHost.reload,
+		config: { inspect: pluginHost.config.inspect, save: pluginHost.config.save },
 		directories: [builtinPluginsDir, pluginsDir],
 	},
 	stickers: { store: stickerStore, scheduleTagging: stickerTagging.schedule, resetTagging: stickerTagging.reset },

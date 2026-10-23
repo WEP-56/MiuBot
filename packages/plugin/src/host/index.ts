@@ -1,4 +1,23 @@
 export {
+	type ConfigIssue,
+	compactAgainstDefaults,
+	configuredSecretKeys,
+	createFilePluginConfig,
+	createPluginConfigAccess,
+	type FilePluginConfigOptions,
+	type PluginConfigAccess,
+	type PluginConfigField,
+	type PluginConfigFieldType,
+	type PluginConfigSchema,
+	type PluginConfigUi,
+	type PluginConfigValue,
+	type PluginConfigValues,
+	type PluginConfigWidget,
+	resolveConfigValues,
+	validateConfigSchema,
+	validateConfigValues,
+} from "./config.ts";
+export {
 	allowsBot,
 	createPluginContext,
 	type PluginContext,
@@ -23,6 +42,7 @@ export {
 export {
 	createPluginHost,
 	listPluginDirectories,
+	type PluginConfigSnapshot,
 	type PluginHost,
 	type PluginHostDependencies,
 	type PluginStatus,

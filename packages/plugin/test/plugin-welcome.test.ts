@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NormalizedPlatformEvent, PlatformEventHandler } from "@miubot/shared/platform/events";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createFilePluginConfig } from "../src/host/config.ts";
 import { createPluginHost, type PluginHostDependencies } from "../src/host/host.ts";
 import { createFileStorage } from "../src/host/storage.ts";
 
@@ -35,6 +36,7 @@ async function harness(defaultBotIds?: string[]) {
 		},
 		sendMessage,
 		storageFor: (pluginId) => createFileStorage({ root: join(root, "storage"), pluginId }),
+		configFor: (pluginId) => createFilePluginConfig({ root: join(root, "config"), pluginId }),
 		logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 		...(defaultBotIds ? { defaultBotIds } : {}),
 	};

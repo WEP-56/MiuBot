@@ -1,4 +1,4 @@
-import type { PluginStatus } from "@miubot/plugin/host/index";
+import type { ConfigIssue, PluginConfigSnapshot, PluginConfigValues, PluginStatus } from "@miubot/plugin/host/index";
 import type { McpRuntime } from "@miubot/plugin/tools/index";
 import type { AgentHost, PeerConfig, RuntimeSession } from "../agent-host.ts";
 import type { RuntimeLog } from "../logging.ts";
@@ -46,6 +46,19 @@ export type HttpContext = {
 		start(id: string): Promise<PluginStatus | undefined>;
 		stop(id: string): Promise<PluginStatus | undefined>;
 		reload(id: string): Promise<PluginStatus | undefined>;
+		/**
+		 * Schema Config 读写。
+		 *
+		 * `inspect()` 已经剔除 secret 真值，路由直接返回即可——遮蔽是宿主的责任，
+		 * 不该由每个入口各自记得处理。
+		 */
+		config: {
+			inspect(id: string): Promise<PluginConfigSnapshot | undefined>;
+			save(
+				id: string,
+				values: Record<string, unknown>,
+			): Promise<{ ok: true; values: PluginConfigValues } | { ok: false; issues: ConfigIssue[] }>;
+		};
 		/** 插件根目录，按扫描优先级排列；工作台用它提示「插件该放哪里」。 */
 		directories: string[];
 	};

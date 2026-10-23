@@ -18,8 +18,46 @@ type Plugin = {
   tools: string[];
   /** 该插件贡献的对话钩子名（插件内短名，会话里挂成 `plugin:{id}/{name}`）；停用后为空。 */
   extensions: string[];
+  /** manifest 是否声明了 `config`；只有声明过的插件才有配置表单。 */
+  hasConfig?: boolean;
   source: "plugin" | "invalid" | "duplicate";
 };
+
+/** manifest 里 `config` 的字段声明（宿主只支持这一层子集）。 */
+type ConfigField = {
+  type: "string" | "number" | "integer" | "boolean";
+  title?: string;
+  description?: string;
+  default?: string | number | boolean;
+  enum?: (string | number)[];
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
+  /** 敏感值：不回显，留空表示保持原值。 */
+  secret?: boolean;
+  "x-ui"?: { widget?: string; placeholder?: string; group?: string };
+};
+
+type ConfigSchema = {
+  type: "object";
+  properties: Record<string, ConfigField>;
+  required?: string[];
+};
+
+type ConfigPayload = {
+  ok: boolean;
+  schema?: ConfigSchema;
+  values: Record<string, string | number | boolean>;
+  secretKeys: string[];
+  restarted?: boolean;
+  message?: string;
+  issues?: { field: string; message: string }[];
+};
+
+/** 表单草稿：布尔用原生值，其余统一按字符串暂存，提交时再转回声明类型。 */
+type Draft = Record<string, string | boolean | null>;
+
 
 type Snapshot = {
   plugins: Plugin[];
@@ -42,11 +80,267 @@ const STATE_CLASS: Record<PluginState, string> = {
   failed: "pill-red",
 };
 
+/** 把 schema 的 `default` 与已保存值合成为表单初始值。 */
+function initialDraft(schema: ConfigSchema, values: ConfigPayload["values"]): Draft {
+  const draft: Draft = {};
+  for (const [key, field] of Object.entries(schema.properties)) {
+    if (field.type === "boolean") {
+      draft[key] = values[key] === undefined ? field.default === true : values[key] === true;
+      continue;
+    }
+    // secret 永远从空开始：宿主压根没把它回显出来。
+    if (field.secret) {
+      draft[key] = "";
+      continue;
+    }
+    const current = values[key] ?? field.default;
+    // 枚举没有当前值时用第一个候选：select 本来就显示第一项，草稿要跟显示一致，
+    // 否则用户看到「fast」却被判「必须选择一项」。
+    if (current === undefined && field.enum?.length) {
+      draft[key] = String(field.enum[0]);
+      continue;
+    }
+    draft[key] = current === undefined ? "" : String(current);
+  }
+  return draft;
+}
+
+/** 按 `x-ui.group` 分组，保持声明顺序；没写分组的进「设置」。 */
+function groupFields(schema: ConfigSchema): { title: string; keys: string[] }[] {
+  const groups: { title: string; keys: string[] }[] = [];
+  for (const [key, field] of Object.entries(schema.properties)) {
+    const title = field["x-ui"]?.group ?? "设置";
+    const group = groups.find((item) => item.title === title);
+    if (group) group.keys.push(key);
+    else groups.push({ title, keys: [key] });
+  }
+  return groups;
+}
+
+/**
+ * 插件配置表单。
+ *
+ * 校验完全交给服务端：这里只负责把输入按声明类型转换后提交，并把 `issues` 标到具体字段上。
+ * 在浏览器里再实现一套规则，很快就会出现「前端放行、保存失败」或反过来的错位。
+ */
+function PluginConfigPanel({ pluginId, onSaved }: { pluginId: string; onSaved: (message: string) => void }) {
+  const [schema, setSchema] = useState<ConfigSchema | null>(null);
+  const [draft, setDraft] = useState<Draft>({});
+  const [secretSet, setSecretSet] = useState<string[]>([]);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const response = await fetch(`/api/plugins/${encodeURIComponent(pluginId)}/config`);
+      const data = (await response.json()) as ConfigPayload;
+      if (cancelled) return;
+      if (!response.ok) {
+        setNotice(data.message ?? "读取配置失败");
+        return;
+      }
+      if (!data.schema) {
+        // 理论上不会发生：hasConfig 为真才显示这个面板。留一条兜底文案而不是白屏。
+        setNotice("该插件未声明配置项");
+        return;
+      }
+      setSchema(data.schema);
+      setDraft(initialDraft(data.schema, data.values));
+      setSecretSet(data.secretKeys ?? []);
+    })().catch((error: unknown) => {
+      if (!cancelled) setNotice(error instanceof Error ? error.message : String(error));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pluginId]);
+
+  const save = async () => {
+    if (!schema) return;
+    const values: Record<string, unknown> = {};
+    for (const [key, field] of Object.entries(schema.properties)) {
+      const raw = draft[key];
+      if (field.type === "boolean") {
+        values[key] = raw === true;
+        continue;
+      }
+      if (raw === null) {
+        // 只有 secret 字段会走到这里：显式清除。
+        values[key] = null;
+        continue;
+      }
+      const text = typeof raw === "string" ? raw : "";
+      if (field.secret) {
+        // 空字符串 = 保持原值（宿主按三态语义处理）。
+        values[key] = text;
+        continue;
+      }
+      if (text.trim() === "") continue;
+      // 枚举以字符串形式存在 select 里，回填时按原候选还原类型，否则数字枚举会被判「必须是数字」。
+      if (field.enum) {
+        const candidate = field.enum.find((item) => String(item) === text);
+        values[key] = candidate ?? text;
+        continue;
+      }
+      // 数字字段只在能解析成数字时才转换。解析不了就原样提交，
+      // 让服务端回「必须是数字」——`Number("abc")` 得到 NaN 再被 JSON 化成 null，
+      // 只会换来一句「不能为空」，排查方向就错了。
+      if (field.type === "number" || field.type === "integer") {
+        const numeric = Number(text);
+        values[key] = Number.isFinite(numeric) ? numeric : text;
+        continue;
+      }
+      values[key] = text;
+    }
+
+    setBusy(true);
+    setErrors({});
+    setNotice("");
+    try {
+      const response = await fetch(`/api/plugins/${encodeURIComponent(pluginId)}/config`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ values }),
+      });
+      const data = (await response.json()) as ConfigPayload;
+      if (!response.ok) {
+        const fieldErrors: Record<string, string> = {};
+        for (const issue of data.issues ?? []) {
+          if (issue.field === "$" || issue.field === "config") continue;
+          fieldErrors[issue.field] = issue.message;
+        }
+        setErrors(fieldErrors);
+        setNotice(data.message ?? "保存失败");
+        return;
+      }
+      if (data.schema) {
+        setSchema(data.schema);
+        setDraft(initialDraft(data.schema, data.values));
+        setSecretSet(data.secretKeys ?? []);
+      }
+      const message = data.restarted
+        ? "已保存，插件已重启生效"
+        : "已保存（插件当前未运行，下次启动时生效）";
+      setNotice(message);
+      onSaved(message);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!schema) {
+    return <div className="rounded-lg border border-[rgba(255,255,255,0.08)] p-3 text-[12px] text-[#888888]">{notice || "读取中…"}</div>;
+  }
+
+  return (
+    <div className="space-y-4 rounded-lg border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.02)] p-4">
+      {groupFields(schema).map((group) => (
+        <div key={group.title} className="space-y-3">
+          <p className="text-[11.5px] font-medium text-[#888888]">{group.title}</p>
+          {group.keys.map((key) => {
+            const field = schema.properties[key]!;
+            const error = errors[key];
+            const label = field.title ?? key;
+            const required = schema.required?.includes(key) ?? false;
+            return (
+              <label key={key} className="block text-[12.5px] text-[#cccccc]">
+                <span className="flex items-center gap-1.5">
+                  {label}
+                  {required && <span className="text-[#f87171]">*</span>}
+                  <span className="font-mono text-[10.5px] text-[#555555]">{key}</span>
+                </span>
+
+                {field.type === "boolean" ? (
+                  <button
+                    type="button"
+                    className="btn-pill-dark mt-1.5"
+                    onClick={() => setDraft({ ...draft, [key]: draft[key] !== true })}
+                  >
+                    {draft[key] === true ? "已开启" : "已关闭"}
+                  </button>
+                ) : field.enum ? (
+                  <select
+                    className="sketch-input mt-1.5 w-full"
+                    value={String(draft[key] ?? "")}
+                    onChange={(event) => setDraft({ ...draft, [key]: event.target.value })}
+                  >
+                    {field.enum.map((candidate) => (
+                      <option key={String(candidate)} value={String(candidate)}>
+                        {String(candidate)}
+                      </option>
+                    ))}
+                  </select>
+                ) : field["x-ui"]?.widget === "textarea" ? (
+                  <textarea
+                    className="sketch-input mt-1.5 w-full resize-y"
+                    rows={3}
+                    placeholder={field["x-ui"]?.placeholder}
+                    value={typeof draft[key] === "string" ? (draft[key] as string) : ""}
+                    onChange={(event) => setDraft({ ...draft, [key]: event.target.value })}
+                  />
+                ) : (
+                  <input
+                    className="sketch-input mt-1.5 w-full"
+                    type={
+                      field.secret || field["x-ui"]?.widget === "password"
+                        ? "password"
+                        : field.type === "number" || field.type === "integer"
+                          ? "number"
+                          : "text"
+                    }
+                    step={field.type === "integer" ? 1 : undefined}
+                    placeholder={
+                      field.secret && secretSet.includes(key) ? "已设置，留空保持不变" : field["x-ui"]?.placeholder
+                    }
+                    value={typeof draft[key] === "string" ? (draft[key] as string) : ""}
+                    onChange={(event) => setDraft({ ...draft, [key]: event.target.value })}
+                  />
+                )}
+
+                <span className="mt-1 flex items-center gap-2">
+                  {field.description && <span className="text-[11.5px] text-[#777777]">{field.description}</span>}
+                  {field.secret && secretSet.includes(key) && (
+                    <button
+                      type="button"
+                      className="text-[11px] text-[#f59e0b] hover:underline"
+                      onClick={() => {
+                        setDraft({ ...draft, [key]: null });
+                        setSecretSet(secretSet.filter((item) => item !== key));
+                      }}
+                    >
+                      清除已保存的值
+                    </button>
+                  )}
+                </span>
+                {error && <span className="mt-1 block text-[11.5px] text-[#f87171]">{error}</span>}
+              </label>
+            );
+          })}
+        </div>
+      ))}
+
+      <div className="flex items-center justify-between gap-3 pt-1">
+        <span className="text-[11.5px] text-[#888888]">{notice}</span>
+        <button className="btn-primary-white" disabled={busy} onClick={() => void save()}>
+          {busy ? "保存中…" : "保存配置"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
 /** 插件工作台：列出插件、启停与重载。 */
 export function Plugins() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
+  /** 当前展开配置表单的插件 id；同时只开一个，避免多个表单争同一个视口。 */
+  const [openConfig, setOpenConfig] = useState("");
 
   const load = async () => {
     const response = await fetch("/api/plugins");
@@ -164,6 +458,16 @@ export function Plugins() {
                       >
                         重载
                       </button>
+                      {plugin.hasConfig && (
+                        <button
+                          className="btn-pill-dark"
+                          disabled={pending}
+                          title="编辑该插件在 manifest 中声明的配置项"
+                          onClick={() => setOpenConfig(openConfig === plugin.id ? "" : plugin.id)}
+                        >
+                          {openConfig === plugin.id ? "收起" : "配置"}
+                        </button>
+                      )}
                     </>
                   )}
                 </div>
@@ -213,6 +517,17 @@ export function Plugins() {
                   <span className="ml-1 text-[11px] text-[#666666]">清理函数 {plugin.disposers}</span>
                 )}
               </div>
+
+              {openConfig === plugin.id && (
+                <PluginConfigPanel
+                  pluginId={plugin.id}
+                  onSaved={(message) => {
+                    setNotice(message);
+                    // 配置保存会重启插件，状态可能从 active 变成 failed（例如新配置让 setup 抛错）。
+                    void load().catch(() => undefined);
+                  }}
+                />
+              )}
             </section>
           );
         })}

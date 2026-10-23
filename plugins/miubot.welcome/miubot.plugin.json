@@ -1,10 +1,25 @@
 {
-	"schemaVersion": 1,
-	"id": "miubot.welcome",
-	"name": "入群欢迎",
-	"version": "0.1.0",
-	"entry": "./index.ts",
-	"description": "Bot 被拉进群聊后发送一条欢迎语",
-	"permissions": ["event:platform.group.bot_added", "message:send", "storage:read", "storage:write"],
-	"bots": ["*"]
+  "schemaVersion": 1,
+  "id": "miubot.welcome",
+  "name": "入群欢迎",
+  "version": "0.2.0",
+  "entry": "./index.ts",
+  "description": "Bot 被拉进群聊后发送一条欢迎语",
+  "permissions": ["event:platform.group.bot_added", "message:send"],
+  "bots": ["*"],
+  "config": {
+    "type": "object",
+    "properties": {
+      "welcomeText": {
+        "type": "string",
+        "title": "欢迎语",
+        "description": "Bot 被拉进群聊后发送的文本",
+        "default": "大家好，我是 MiuBot。需要帮忙随时 @ 我。",
+        "minLength": 1,
+        "maxLength": 500,
+        "x-ui": { "widget": "textarea", "group": "消息设置" }
+      }
+    },
+    "required": ["welcomeText"]
+  }
 }

@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createFileStorage, createPluginHost, type PluginHost } from "@miubot/plugin/host/index";
+import { createFilePluginConfig, createFileStorage, createPluginHost, type PluginHost } from "@miubot/plugin/host/index";
 import { McpRuntime } from "@miubot/plugin/tools/index";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createAgentHost, type AgentHost, type PeerConfig, type RuntimeSession } from "../src/agent-host.ts";
@@ -69,6 +69,7 @@ beforeAll(async () => {
 		eventSource: { subscribe: () => () => undefined },
 		sendMessage: vi.fn().mockResolvedValue(undefined),
 		storageFor: (pluginId) => createFileStorage({ root: join(root, "storage"), pluginId }),
+		configFor: (pluginId) => createFilePluginConfig({ root: join(root, "config"), pluginId }),
 		logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 		reservedToolNames: () => ["web_search", "read", "bash"],
 	});

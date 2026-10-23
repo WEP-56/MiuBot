@@ -5,6 +5,7 @@ import type {
 	PlatformEventType,
 } from "@miubot/shared/platform/events";
 import type { MessageTarget, PluginMessageSender, PluginTextOptions } from "@miubot/shared/platform/outbound";
+import type { PluginConfigAccess } from "./config.ts";
 import type { PluginExtensionFactory } from "./extensions.ts";
 import type { PluginLifecycle } from "./lifecycle.ts";
 import { PluginInactiveError } from "./lifecycle.ts";
@@ -34,6 +35,13 @@ export type PluginContext = {
 	readonly events: PluginEventSubscriber;
 	readonly messages: PluginMessageSender;
 	readonly storage: PluginStorage;
+	/**
+	 * 只读配置：manifest 声明 `config` 后，管理员在工作台填的值 + 默认值。
+	 *
+	 * 未声明 `config` 时恒为空对象。保存配置会让宿主重启插件，因此 `setup()` 里读到的
+	 * 就是最新值，不需要订阅变更事件。
+	 */
+	readonly config: PluginConfigAccess;
 	/** 注册 Agent Tool；需要 manifest 声明 `tool:register`。 */
 	readonly tools: PluginToolRegistrar;
 	/** 注册对话钩子（Pi Extension）；需要 manifest 声明 `extension:register`。 */
@@ -99,6 +107,8 @@ export type PluginContextDependencies = {
 		options?: PluginTextOptions,
 	) => Promise<void>;
 	storage: PluginStorage;
+	/** 配置读取入口；由宿主按 manifest 的 `config` 声明构造。 */
+	config: PluginConfigAccess;
 	logger: PluginLogger;
 	/** 工具注册入口；由宿主负责命名冲突与作用域，上下文只补权限与代次校验。 */
 	registerTool: (pluginId: string, generation: number, definition: PluginToolDefinition) => () => void;
@@ -237,6 +247,18 @@ export function createPluginContext(deps: PluginContextDependencies): PluginCont
 					throw new PluginInactiveError(deps.manifestId, "未声明权限 storage:read");
 				}
 				return deps.storage.keys();
+			},
+		},
+		// 配置不设权限位：插件只能读到自己的配置，声明 `config` 本身就是授权。
+		// 加一个 `config:read` 只会让「声明了 schema 却忘了加权限、读到的永远是空对象」变成常见故障。
+		config: {
+			async all() {
+				guard("读取配置");
+				return deps.config.all();
+			},
+			async get(key) {
+				guard(`读取配置项 ${key}`);
+				return deps.config.get(key);
 			},
 		},
 		tools: {

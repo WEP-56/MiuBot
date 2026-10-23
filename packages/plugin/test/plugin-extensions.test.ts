@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PlatformEventHandler } from "@miubot/shared/platform/events";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createFilePluginConfig } from "../src/host/config.ts";
 import { createPluginHost, type PluginHost, type PluginHostDependencies } from "../src/host/host.ts";
 import { createFileStorage } from "../src/host/storage.ts";
 
@@ -17,6 +18,7 @@ async function harness(): Promise<{ host: PluginHost; pluginsDir: string }> {
 	roots.push(root);
 	const pluginsDir = join(root, "plugins");
 	const storageDir = join(root, "storage");
+	const configDir = join(root, "config");
 	await mkdir(pluginsDir, { recursive: true });
 	const handlers = new Map<string, Set<PlatformEventHandler>>();
 	const deps: PluginHostDependencies = {
@@ -31,6 +33,7 @@ async function harness(): Promise<{ host: PluginHost; pluginsDir: string }> {
 		},
 		sendMessage: vi.fn().mockResolvedValue(undefined),
 		storageFor: (pluginId) => createFileStorage({ root: storageDir, pluginId }),
+		configFor: (pluginId) => createFilePluginConfig({ root: configDir, pluginId }),
 		logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 	};
 	return { host: createPluginHost(deps), pluginsDir };

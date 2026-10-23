@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
+import { createPluginConfigAccess } from "../src/host/config.ts";
 import { createPluginContext } from "../src/host/context.ts";
 import { createPluginLifecycle, PluginInactiveError } from "../src/host/lifecycle.ts";
 import type { PluginPermission } from "../src/host/manifest.ts";
+
+/** 生命周期测试只需要「能读到东西」，配置内容本身在 config 测试里覆盖。 */
+function configAccess(): ReturnType<typeof createPluginConfigAccess> {
+	return createPluginConfigAccess({
+		schema: { type: "object", properties: { greeting: { type: "string", default: "hi" } } },
+		read: async () => ({}),
+	});
+}
 
 function setup(permissions: PluginPermission[] = []) {
 	const lifecycle = createPluginLifecycle("test.plugin");
@@ -27,6 +36,7 @@ function setup(permissions: PluginPermission[] = []) {
 			delete: vi.fn().mockResolvedValue(undefined),
 			keys: vi.fn().mockResolvedValue(["a"]),
 		},
+		config: configAccess(),
 		logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 		registerTool: () => () => {},
 		registerExtension: () => () => {},
@@ -153,6 +163,7 @@ describe("plugin context permissions", () => {
 			subscribePlatformEvent: () => () => {},
 			sendMessage,
 			storage: { get: async () => undefined, set: async () => {}, delete: async () => {}, keys: async () => [] },
+			config: configAccess(),
 			logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 			registerTool: () => () => {},
 			registerExtension: () => () => {},

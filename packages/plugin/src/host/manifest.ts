@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { PlatformEventType } from "@miubot/shared/platform/events";
+import { type PluginConfigSchema, validateConfigSchema } from "./config.ts";
 
 /** Manifest 文件名。一个插件目录只认这一个文件。 */
 export const MANIFEST_FILE = "miubot.plugin.json";
@@ -58,6 +59,8 @@ export type PluginManifest = {
 	permissions: PluginPermission[];
 	/** 允许操作的 Bot id 列表；`["*"]` 表示全部。缺省视为 `["*"]`（单 Bot 场景）。 */
 	bots?: string[];
+	/** 配置声明；声明后工作台才会为它渲染表单，插件才能从 `ctx.config` 读到值。 */
+	config?: PluginConfigSchema;
 };
 
 export type ManifestIssue = { field: string; message: string };
@@ -205,6 +208,15 @@ export function validateManifest(
 		}
 	}
 
+	// schema 写错属于插件作者的问题，必须让加载失败并指出精确字段：
+	// 放行一个坏 schema 会让工作台渲染出半截表单，报错却落在「保存配置失败」上。
+	let config: PluginConfigSchema | undefined;
+	if (raw.config !== undefined) {
+		const parsed = validateConfigSchema(raw.config);
+		if (parsed.ok) config = parsed.schema;
+		else issues.push(...parsed.issues);
+	}
+
 	if (
 		issues.length > 0 ||
 		!entryPath ||
@@ -231,6 +243,7 @@ export function validateManifest(
 			permissions,
 			...(description ? { description } : {}),
 			...(bots ? { bots } : {}),
+			...(config ? { config } : {}),
 		},
 	};
 }

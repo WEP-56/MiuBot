@@ -8,6 +8,17 @@ import type {
 	PlatformEventType,
 } from "@miubot/shared/platform/events";
 import type { MessageTarget, PluginTextOptions } from "@miubot/shared/platform/outbound";
+import {
+	type ConfigIssue,
+	compactAgainstDefaults,
+	configuredSecretKeys,
+	createPluginConfigAccess,
+	type PluginConfigSchema,
+	type PluginConfigValue,
+	type PluginConfigValues,
+	resolveConfigValues,
+	validateConfigValues,
+} from "./config.ts";
 import { createPluginContext, type PluginContext, type PluginLogger, type PluginStorage } from "./context.ts";
 import {
 	createPluginExtensionRegistry,
@@ -35,6 +46,8 @@ export type PluginStatus = {
 	tools: string[];
 	/** 该插件贡献的对话钩子名（停用后清空）。 */
 	extensions: string[];
+	/** manifest 是否声明了 `config`；工作台据此决定要不要显示「配置」按钮。 */
+	hasConfig: boolean;
 	/**
 	 * 条目来源。
 	 *
@@ -43,6 +56,17 @@ export type PluginStatus = {
 	 * 永远失败的行反复点「启用」。
 	 */
 	source: "plugin" | "invalid" | "duplicate";
+};
+
+/**
+ * 管理面的配置快照：schema + 可见值 + 已设置的 secret 键。
+ *
+ * `values` 里**不含** secret 真值；想知道某个 secret 有没有设过，看 `secretKeys`。
+ */
+export type PluginConfigSnapshot = {
+	schema?: PluginConfigSchema;
+	values: PluginConfigValues;
+	secretKeys: string[];
 };
 
 export type PluginHostDependencies = {
@@ -65,6 +89,16 @@ export type PluginHostDependencies = {
 	) => Promise<void>;
 	/** 按插件 id 取存储实例。 */
 	storageFor: (pluginId: string) => PluginStorage;
+	/**
+	 * 按插件 id 取配置的读写入口。
+	 *
+	 * 与 `storageFor` 分开注入：两者的备份与卸载语义不同（删数据不等于删配置），
+	 * 宿主也不该知道配置文件放在哪个目录。
+	 */
+	configFor: (pluginId: string) => {
+		read(): Promise<Record<string, unknown>>;
+		write(values: PluginConfigValues): Promise<void>;
+	};
 	logger: PluginLogger;
 	/** 未在 manifest 声明 `bots` 时的默认 Bot 范围。 */
 	defaultBotIds?: string[];
@@ -246,6 +280,7 @@ export function createPluginHost(deps: PluginHostDependencies) {
 			disposers: entry.lifecycle.disposerCount,
 			tools: tools.namesOf(entry.manifest.id),
 			extensions: extensions.namesOf(entry.manifest.id),
+			hasConfig: entry.manifest.config !== undefined,
 			source: entry.source,
 		};
 	}
@@ -370,6 +405,9 @@ export function createPluginHost(deps: PluginHostDependencies) {
 		const { signal } = entry.lifecycle.begin();
 		// 限流器随实例创建：插件重启后额度自动清零。
 		const rateLimiter = createSendRateLimiter(manifest.id, deps.sendRateLimit);
+		// 配置每次读盘而不是缓存：保存配置后宿主会重启插件，`setup()` 里拿到的必然是新值；
+		// 缓存反而会让「重启了但还是旧配置」这种问题看起来像插件写错了。
+		const configStore = deps.configFor(manifest.id);
 		const context = createPluginContext({
 			lifecycle: entry.lifecycle,
 			manifestId: manifest.id,
@@ -382,6 +420,7 @@ export function createPluginHost(deps: PluginHostDependencies) {
 				await deps.sendMessage(pluginId, botId, target, text, options);
 			},
 			storage: deps.storageFor(manifest.id),
+			config: createPluginConfigAccess({ schema: manifest.config, read: () => configStore.read() }),
 			logger: deps.logger,
 			registerTool: (pluginId, generation, definition: PluginToolDefinition) =>
 				tools.register({ pluginId, generation, botIds, definition }),
@@ -535,6 +574,78 @@ export function createPluginHost(deps: PluginHostDependencies) {
 		return entry ? statusOf(entry) : undefined;
 	}
 
+	/**
+	 * 管理面读配置：补齐默认值、剔除 secret 真值，只回报「哪些 secret 已设置」。
+	 *
+	 * 剔除放在宿主而不是路由：将来多一个入口（CLI、另一个前端）时，遮蔽语义不该靠
+	 * 每个调用方各自记得处理。插件自己走 `ctx.config`，那条路径拿的是明文。
+	 */
+	async function inspectConfig(id: string): Promise<PluginConfigSnapshot | undefined> {
+		const entry = entries.get(id);
+		if (!entry) return undefined;
+		const schema = entry.manifest.config;
+		const { values } = resolveConfigValues(schema, await deps.configFor(id).read());
+		const visible: PluginConfigValues = {};
+		for (const [key, value] of Object.entries(values)) {
+			if (schema?.properties[key]?.secret === true) continue;
+			visible[key] = value;
+		}
+		return {
+			...(schema ? { schema } : {}),
+			values: visible,
+			secretKeys: configuredSecretKeys(schema, values),
+		};
+	}
+
+	/**
+	 * 校验并落盘配置。**不负责重启插件**——那是管理面的编排动作（`reload`），
+	 * 宿主只保证「写进去的值是合法的」。
+	 *
+	 * secret 的三态语义（避开「留空就把密钥清掉了」这类误操作）：
+	 * - 缺省 / 空字符串：保持原值
+	 * - `null`：清除
+	 * - 有值：覆盖
+	 */
+	async function saveConfig(
+		id: string,
+		input: Record<string, unknown>,
+	): Promise<{ ok: true; values: PluginConfigValues } | { ok: false; issues: ConfigIssue[] }> {
+		const entry = entries.get(id);
+		if (!entry) return { ok: false, issues: [{ field: "$", message: "插件不存在" }] };
+		if (entry.source !== "plugin") return { ok: false, issues: [{ field: "$", message: "该条目不可配置" }] };
+		// `reload()` 会替换 manifest，这里每次取当前值而不是缓存的 schema。
+		const schema = entry.manifest.config;
+		if (!schema) return { ok: false, issues: [{ field: "config", message: "插件未在 manifest 中声明 config" }] };
+
+		const store = deps.configFor(id);
+		const current = resolveConfigValues(schema, await store.read()).values;
+		/**
+		 * 只合并 schema 声明过的键。
+		 *
+		 * 提交里出现未知键时**静默丢弃**而不是报错：schema 删掉一个字段后，旧前端缓存或
+		 * 手工 curl 仍可能带着它，为此让保存失败只会挡住与它无关的修改。
+		 */
+		const merged: Record<string, unknown> = {};
+		for (const [key, field] of Object.entries(schema.properties)) {
+			const submitted = input[key];
+			if (field.secret === true) {
+				if (submitted === null) continue;
+				if (submitted === undefined || submitted === "") {
+					if (current[key] !== undefined) merged[key] = current[key];
+					continue;
+				}
+			}
+			if (submitted !== undefined) merged[key] = submitted;
+		}
+
+		const validated = validateConfigValues(schema, merged);
+		if (!validated.ok) return validated;
+		await store.write(compactAgainstDefaults(schema, validated.values));
+		// 只报事件不报内容：配置里可能有密钥。
+		deps.logger.info(`插件 ${id} 配置已更新`);
+		return validated;
+	}
+
 	return {
 		discover,
 		start,
@@ -555,6 +666,12 @@ export function createPluginHost(deps: PluginHostDependencies) {
 		extensions: {
 			factoriesFor: extensions.factoriesFor,
 			list: extensions.list,
+		},
+		/** manifest 声明的配置 schema；未声明时为 `undefined`。 */
+		config: {
+			schemaOf: (id: string): PluginConfigSchema | undefined => entries.get(id)?.manifest.config,
+			inspect: inspectConfig,
+			save: saveConfig,
 		},
 		/**
 		 * 是否存在订阅了该事件类型的启用插件。

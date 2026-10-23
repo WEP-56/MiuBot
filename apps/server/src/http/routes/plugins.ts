@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { PluginStatus } from "@miubot/plugin/host/index";
 import type { PluginSettings } from "../../runtime.ts";
 import type { HttpContext } from "../context.ts";
-import { json } from "../response.ts";
+import { body, json } from "../response.ts";
 
 /**
  * `/api/plugins`：插件清单、启停与重载。
@@ -46,6 +46,75 @@ export async function handlePluginRoutes(
 		json(res, 200, { ok: true, ...snapshot(ctx) });
 		return true;
 	}
+
+	/**
+	 * Schema Config：`GET` 取 schema 与当前值，`PUT` 保存并让运行中的插件重新读取。
+	 *
+	 * 配置在插件 `setup()` 时读取，因此改完必须重启插件才生效。这里只重启**本来就在运行**
+	 * 的插件：已停用的插件不该因为保存一次配置就自己起来（那与 `disabled` 的语义冲突），
+	 * 它下次启动时自然会读到新值。
+	 */
+	const configAction = url.pathname.match(/^\/api\/plugins\/([^/]+)\/config$/);
+	if (configAction && (req.method === "GET" || req.method === "PUT")) {
+		const id = decodeURIComponent(configAction[1]!);
+		const current = ctx.plugins.get(id);
+		if (!current) {
+			json(res, 404, { ok: false, message: "插件不存在" });
+			return true;
+		}
+		if (current.source !== "plugin") {
+			json(res, 400, { ok: false, message: current.error ?? "该条目不可配置" });
+			return true;
+		}
+		const settings = ctx.config.get().plugins;
+
+		if (req.method === "GET") {
+			const config = await ctx.plugins.config.inspect(id);
+			if (!config) {
+				json(res, 404, { ok: false, message: "插件不存在" });
+				return true;
+			}
+			json(res, 200, { ok: true, id, enabled: isAllowedByConfig(settings, current), ...config });
+			return true;
+		}
+
+		const payload = await body(req);
+		// 没有 schema 时直接说明，而不是让 `save()` 回一句「校验失败」——后者会让人
+		// 以为是填错了值，实际上是这个插件根本没有可配置项。
+		if (!current.hasConfig) {
+			json(res, 400, { ok: false, message: "插件未在 manifest 中声明 config" });
+			return true;
+		}
+		const values = payload.values;
+		if (typeof values !== "object" || values === null || Array.isArray(values)) {
+			json(res, 400, { ok: false, message: "values 必须是对象" });
+			return true;
+		}
+		const saved = await ctx.plugins.config.save(id, values as Record<string, unknown>);
+		if (!saved.ok) {
+			// 逐字段返回而不是一句「保存失败」：表单要能把错误标在具体输入框上。
+			json(res, 400, { ok: false, message: "配置未通过校验", issues: saved.issues });
+			return true;
+		}
+
+		/**
+		 * 重启才能让新配置生效（插件在 `setup()` 里读配置）。
+		 *
+		 * 重启后插件工具与对话钩子会以新代次重新注册，已有会话里还是旧代次的定义，
+		 * 一调用就会被「插件已停用」挡掉。所以和启停一样重建一次会话——这里偷懒省掉
+		 * 这一步，用户看到的现象是「改完欢迎语，Agent 的插件工具突然不好使了」。
+		 */
+		const restarted = current.state === "active" && isAllowedByConfig(settings, current);
+		if (restarted) {
+			await ctx.plugins.reload(id);
+			ctx.agentHost.rebuildAgentSessions();
+		}
+		// 回读而不是回显 `saved.values`：后者含 secret 明文。
+		const config = await ctx.plugins.config.inspect(id);
+		json(res, 200, { ok: true, id, restarted, ...config });
+		return true;
+	}
+
 	const action = url.pathname.match(/^\/api\/plugins\/([^/]+)\/(enable|disable|reload)$/);
 	if (!action || req.method !== "POST") return false;
 
