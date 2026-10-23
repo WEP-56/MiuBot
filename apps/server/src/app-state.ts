@@ -1,7 +1,8 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { PeerConfig, RuntimeSession } from "./agent-host.ts";
 import { type AppConfig, createDefaultConfig, type ModelConfig, type ProviderConfig } from "./runtime.ts";
+import { restrictFileMode, writeJsonAtomic } from "./storage.ts";
 
 export type ProactiveUsage = { date: string; sent: number };
 
@@ -48,23 +49,19 @@ export function createAppState(options: { dataDir: string }): AppState {
 	let usage: ProactiveUsage = { date: "", sent: 0 };
 
 	async function saveConfig(): Promise<void> {
-		await mkdir(options.dataDir, { recursive: true });
-		await writeFile(configPath, JSON.stringify(config, null, 2), "utf8");
+		await writeJsonAtomic(configPath, config);
 	}
 
 	async function saveSessions(): Promise<void> {
-		await mkdir(options.dataDir, { recursive: true });
-		await writeFile(sessionsPath, JSON.stringify(sessions, null, 2), "utf8");
+		await writeJsonAtomic(sessionsPath, sessions);
 	}
 
 	async function savePeers(): Promise<void> {
-		await mkdir(options.dataDir, { recursive: true });
-		await writeFile(peersPath, JSON.stringify(peers, null, 2), "utf8");
+		await writeJsonAtomic(peersPath, peers);
 	}
 
 	async function saveProactiveUsage(): Promise<void> {
-		await mkdir(options.dataDir, { recursive: true });
-		await writeFile(usagePath, JSON.stringify(usage, null, 2), "utf8");
+		await writeJsonAtomic(usagePath, usage);
 	}
 
 	function getDefaultModel(): { provider: ProviderConfig; model: ModelConfig } | undefined {
@@ -284,6 +281,8 @@ export function createAppState(options: { dataDir: string }): AppState {
 			} catch {
 				usage = { date: "", sent: 0 };
 			}
+			// 旧版本写下的文件是 umask 默认权限（典型 0644），升级后第一次启动顺手收紧。
+			await Promise.all([configPath, sessionsPath, peersPath, usagePath].map(restrictFileMode));
 		},
 		getConfig: () => config,
 		setConfig: (next) => {

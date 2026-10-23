@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { HttpContext } from "./context.ts";
+import { handleAuthRoutes } from "./routes/auth.ts";
 import { handleChatRoutes } from "./routes/chat.ts";
 import { handleConfigRoutes } from "./routes/config.ts";
 import { handlePersonaRoutes } from "./routes/personas.ts";
@@ -21,6 +22,7 @@ type RouteHandler = (ctx: HttpContext, req: IncomingMessage, res: ServerResponse
  * 新增管理端点在这里注册；认证、CORS、404 与错误边界由 `server.ts` 统一处理。
  */
 const handlers: RouteHandler[] = [
+	handleAuthRoutes,
 	handleSystemRoutes,
 	handleConfigRoutes,
 	handleToolRoutes,

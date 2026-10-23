@@ -5,7 +5,8 @@
 	"type": "module",
 	"scripts": {
 		"dev": "node --conditions=source --enable-source-maps src/index.ts",
-		"start": "node --conditions=source --enable-source-maps src/index.ts"
+		"start": "node --conditions=source --enable-source-maps src/index.ts",
+		"hash-password": "node --conditions=source scripts/hash-password.ts"
 	},
 	"dependencies": {
 		"@miubot/context": "0.0.0",

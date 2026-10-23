@@ -7,11 +7,13 @@ import type {
 } from "@miubot/plugin/host/index";
 import type { McpRuntime } from "@miubot/plugin/tools/index";
 import type { AgentHost, PeerConfig, RuntimeSession } from "../agent-host.ts";
+import type { AuthService } from "../auth.ts";
 import type { RuntimeLog } from "../logging.ts";
 import type { ProactiveDecision, ProactiveMetrics } from "../proactive.ts";
 import type { QqConnectionState, QrState } from "../qq/connection.ts";
 import type { AppConfig, QqBotConfig } from "../runtime.ts";
 import type { StickerStore } from "../stickers.ts";
+import type { UpdateChecker } from "../update-check.ts";
 
 /**
  * 管理 API 的依赖上下文。
@@ -41,6 +43,12 @@ export type HttpContext = {
 	};
 	agentHost: AgentHost;
 	mcpRuntime: McpRuntime;
+	/** 管理面认证：登录、会话校验与撤销、口令修改。 */
+	auth: AuthService;
+	/** 当前版本号（`MIUBOT_VERSION` / `VERSION` 文件 / `package.json`）。 */
+	version: string;
+	/** 内置更新检查（只提示，不自动升级）。 */
+	updates: UpdateChecker;
 	/**
 	 * 插件宿主。启停由宿主负责，是否允许启停由配置里的 `plugins.enabled/disabled` 决定，
 	 * 两者都要写——只改运行时状态的话，下次启动又会被配置翻回去。
