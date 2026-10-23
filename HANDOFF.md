@@ -1,14 +1,184 @@
 # 交接文档：Plugin 模块（阶段 A / B / C 主体已完成）
 
 > 用途：因会话上下文过长，在新会话继续开发时先读这份。
-> 最后更新：2026-10-23 14:10
+> 最后更新：2026-10-23 18:00
 
 **第一次读这份时按这个顺序：**
 
-1. §一 当前状态 —— 已推到哪、门禁是否绿
-2. **§五.0 下一步候选** —— 从里面挑一件开工，别再回头重做已完成的部分
+1. **§零 下一轮计划** —— 2026-10-23 提出的五条线，都还没开工；从这里挑一件
+2. §一 当前状态 —— 已推到哪、门禁是否绿
 3. §三 关键设计决策 —— 动手前必须知道哪些是刻意如此的
 4. 相关工作区 §二 代码位置 + §六 已知遗留
+
+---
+
+## 零、下一轮计划（2026-10-23 提出，全部未开工）
+
+五条线互不依赖。建议顺序 **4 → 2 → 5 → 1 → 3**：4 和 2 改的是服务端数据模型与入站流程，
+5 与 2 同属"工具级配置"、可以顺手一起做，1 是纯前端收口，3 依赖 2 落地后才有"每会话"的统计口径。
+
+### 1. 前端布局与控件一致性
+
+**1a 主内容区水平居中（只有表情包页是对的）**
+
+| 页面 | 容器 | 现状 |
+|---|---|---|
+| `Stickers.tsx:96` | `mx-auto max-w-[1100px]` | ✅ 参考实现：居中 + 有上限 |
+| `Dashboard.tsx:13` | `max-w-[760px]` | ❌ 偏左 |
+| `Plugins.tsx:492` | `max-w-[760px]` | ❌ 偏左 |
+| `Advanced.tsx`（8 处 section） | `max-w-[760px]` | ❌ 偏左 |
+| `Personas.tsx:20` | `max-w-[900px]` | ❌ 偏左 |
+| `Platforms.tsx:23` | `max-w-[900px]` | ❌ 偏左 |
+| `Providers.tsx:69` | `max-w-[980px]` | ❌ 偏左 |
+| `Debug.tsx` / `Sessions.tsx` | 全宽 flex / 双栏 | 保持原样（用户明确排除） |
+
+缺的就是一个 `mx-auto`。但别只补 8 个 `mx-auto` 了事——各页的宽度（760/900/980/1100）和
+外层样式（有的 `bg-black text-white`，有的 `var(--bg-app)` + `var(--text-main)`）本来就
+不一致，这正是"整体偏左 + 视觉不齐"的根因。
+
+落点：`apps/web/src/components/PageShell.tsx`，props `{ width?: 760|900|980|1100, children }`，
+内部 `mx-auto max-w-[…]`；逐页替换手写容器，顺手统一外层背景/文字色变量。
+验收：1280 宽窗口下各页左右留白相等；缩到 900 宽内容跟着缩且仍居中；表情包页视觉不变。
+
+**1b 控件风格：原生 → 微拟物**
+
+现状盘点（都是浏览器原生外观）：
+
+- `<input type="checkbox">`：`Platforms.tsx`、`Plugins.tsx`、`Advanced.tsx`（Tools 页每个开关）、`Personas.tsx` 等
+- `<select className="sketch-input">`：Stickers 打标模型、Tools 搜索提供商、Providers 类型选择
+- `Providers.tsx:70` 还有个 hack：把原生 `<select>` 设成 `opacity-0` 盖在按钮上做下拉
+- `type="range"`：`Stickers.tsx` 自动采集概率（只有 `accent-color`）
+
+落点：`components/Toggle.tsx`（`role="switch"` + 凹槽 + 圆形滑块，开=绿）、`components/Select.tsx`
+（自绘下拉，键盘 ↑↓/Enter/Esc 可用，`aria-expanded`）、`components/Slider.tsx`；样式变量放 `index.css`。
+
+坑：
+- 别为了好看把 `<select>` 换成 `div` 却丢掉键盘操作与 `label` 关联——自绘组件必须自己补齐
+  `role`/`aria-*`/焦点环/Tab 顺序，否则是可用性倒退。
+- `opacity-0` 覆盖式下拉统一后应删除（它是为了"看起来像按钮、实际是 select"）。
+- 一次性换完再截图对比，别一半原生一半自绘。
+
+### 2. 群 / 私聊细粒度配置
+
+现状：`PeerConfig`（`agent-host.ts:37-47`）只有 `personaId` / `providerId` / `modelId` /
+`useTools`（布尔）/ `features.activeReply`。工具是全局 `config.tools.enabled`，对象级只有
+"全开或全关"。
+
+**2a 备用模型**
+
+- `PeerConfig` 增 `fallbackProviderId` / `fallbackModelId`（空 = 不启用）。
+- 回退点选在**请求级**（`agent-host.getAgentSession()` 里取模型处）：主模型缺 key、模型被删、
+  或 provider 报错时用备用模型重试一次。
+- **不要静默切换**：回退要在运行日志里记 `WARN`，并在回复里留痕（至少 `session.lastModelUsed`），
+  否则用户会以为主模型坏了却查不到原因。
+- 待定：回退是否也覆盖"主模型可用但 429/超时"。建议第一版只覆盖"不可用"，限流重试另算。
+
+**2b 分作用域工具**
+
+- `PeerConfig` 增 `toolsOverride?: string[] | null`（`null` = 继承全局）。
+- 唯一的执行点已经存在：`agent-host.enabledToolNames()` 里已经读了 `peer.useTools`，
+  在那里做 `toolsOverride ?? config.tools.enabled` 即可，**不要**在入站流程里另写一套过滤。
+- 注意这条链上不止内置工具名：`enabledToolNames()` 还拼了 `load_skill` / `search_stickers` /
+  `send_sticker` / MCP 工具 / 插件工具。过滤只应作用于"内置 + 可配置"那一段，别把插件工具一起过滤掉。
+- UI：会话/对象配置弹窗加"工具"多选（继承 / 自定义），跟现有"聊天模型、人格、主动行为"并列。
+
+验收：给某个群设自定义只留 `web_search` → 该群 `bash` 不可用、其它群不受影响；把该群主模型
+指向一个已删除的模型 → 回退到备用并在日志里看到 `WARN`。
+
+### 3. 首页概览接真实数据
+
+现状：`Dashboard.tsx` 全是硬编码（`1,284` / `2.6M` / `2 / 2` / `99.2%`），页脚自己写着
+"布局概念示意 · 数据为虚构样例"。
+
+| 卡片 | 能不能算 | 数据源 |
+|---|---|---|
+| 今日消息 | ✅ | 会话 `messages[].timestamp` 按当天过滤（`state.getSessions()`） |
+| 在线 Bot | ✅ | `ctx.qq.states`（`phase === "connected"`） |
+| 平台连接列表 | ✅ | 同上 + `qqBots` 昵称 |
+| Token 消耗 / 费用 | ⚠️ 需补采集 | `AgentSession.getSessionStats()` 有 `usage` 合计（含 cost），但只在内存里、且会话不常驻 |
+| API 成功率 | ❌ 无数据源 | 现在只有运行日志里的 ERROR 行，不是成功率 |
+| 平均耗时 / Agent 触发 | ❌ 无数据源 | 未埋点 |
+
+建议：
+- 新增 `GET /api/overview` 在服务端聚合，别让前端拉五个接口自己算。
+- token 采集：`inbound.ts` 每轮 `prompt()` 结束后读一次 `agentSession.getSessionStats()`，
+  把**增量**写进 `usage.json`（结构可参考现有的 `proactive-usage`），按天分桶。
+- "成功率"和"平均耗时"这两张卡**要么删、要么换成真有数据的指标**（如"今日主动消息 / 被拦截"，
+  `proactive.metrics` 里有）。不要为了凑满 2×2 去造数据——这一页现在的问题就是造数据。
+
+### 4. 斜杠命令 + 管理员
+
+**现状 bug**：`inbound.ts:118` 的 `if (isGroup && !mentioned) { proactive.queueGroupMessage(...); return; }`
+排在命令判定（`:142` `/new`、`:155` `/compact`）之前——群里不 @ 的 `/new` 根本到不了命令分支，
+私聊能用、@ 了也能用。这就是"群聊下无法使用 /new"的原因。
+
+**现状**：命令是两条 `if (text === "/new")` 硬编码，没有注册表、没有权限、没有帮助。
+
+目标：
+
+- `apps/server/src/commands/`：注册表 `{ name, description, permission: "admin" | "all", run(ctx) }`，
+  内置 `new` / `compact` / `help`；解析放在**去重与白名单之后、群聊闸门之前**，命中即接管
+  （不走插话、不进 Agent）。
+- 管理员：`config.admins: string[]`（QQ 用户 openid）。**默认空 = 没有人能执行管理员命令**
+  （安全默认），启动日志与 UI 都要提示"尚未配置管理员"。
+- 新增「高级配置 → 斜杠命令」页：命令总览（名称/说明/权限/开关）+ 管理员名单 + 每个命令的启停。
+- 为插件留口：插件经 `ctx.commands.register()` 注册命令，与 `ctx.tools` / `ctx.extensions` 同一套
+  代次 + 权限守卫（`plugin:command:register`），命名冲突规则照抄工具注册表。
+
+坑：
+- 命令解析必须在 `normalizeMessageEvent` 剥离 @ 之后（现状已满足），否则群里 `@bot /new` 匹配不上。
+- 群聊里非 @ 的命令**只接管已注册的命令**；其余以 `/` 开头的普通聊天仍走插话，否则会误吞群友的消息。
+- 命令回复走被动回复锚点（`inboundReferences`），不要新开一条主动推送。
+
+验收：群里不 @ 发 `/new` → 新建会话；`/help` 列出可用命令；非管理员发 `/admin` 被拒且记审计；
+关掉某命令后它不再响应；插件注册的命令出现在同一张表里。
+
+### 5. 图像生成提供商配置下移到 高级配置 → Tools → image_gen
+
+**现状**：`image_gen` 的提供商配置挂在 `Providers.tsx` 里，和 LLM 提供商并列（同一页两个区块 +
+"添加提供商 → 图像生成"的分支），数据存在 `config.imageProviders[]`（`runtime.ts:98`），
+经 `PUT /api/config` 保存。而 `web_search` 的提供商配置在 Tools 页，数据是
+`config.tools.webSearch = { provider, apiKeys }`（`runtime.ts:54`）。
+
+同一个层级上放着两种语义：**LLM 提供商**是 Agent 的推理后端，**图像提供商**是
+`image_gen` 这个工具的依赖。放在一起会让人以为"换个提供商就能换掉模型的图像能力"。
+
+**还有一处语义缺口**（不只是 UI 位置）：`agent-host.ts:215` 选图像提供商的方式是
+`config().imageProviders.find((item) => item.enabled && item.apiKey)`——**第一个启用且有 key 的**，
+没有显式选择；`web_search` 则有 `tools.webSearch.provider` 明确指向。所以"下移"必须连同
+"显式选择"一起做，否则只是换了个页面摆。
+
+**方案（推荐）**：
+
+- 数据：`config.imageProviders[]` **保留**（用户可自定义 baseUrl/model，不像 web_search 是固定枚举），
+  新增 `config.tools.imageGen = { providerId: string }`（空 = 未选择，`image_gen` 直接不可用）。
+- 读取：`agent-host.ts:215` 改成按 `providerId` 找，找不到就报"图像提供商未配置"，
+  不再"随便挑第一个"。
+- 写入：`PUT /api/tools` 增加 `imageGen.providerId`（与 `webSearch` 同一处，别再开第二个写入口）；
+  `PUT /api/config` 继续负责 `imageProviders[]` 的增删改。
+- UI：`Tools.tsx` 的 `image_gen` 卡片里放提供商下拉 + key 输入 + "新建图像提供商"，
+  与 `web_search` 卡片同构；`Providers.tsx` 只留 LLM 提供商，删掉图像分支。
+
+**另一种更彻底的做法**：完全对齐 web_search，把 key 也挪进 `tools.imageGen.apiKeys`、删掉
+`config.imageProviders[]`。**不建议**——web_search 的四个提供商是代码里写死的，而图像提供商
+要允许自定义 baseUrl / model / 多个并存，硬套同一个结构会丢掉这些能力，还要写配置迁移。
+
+坑：
+- 现有用户配置里 `imageProviders[0].enabled && apiKey` 就是当前生效的那个；迁移时把它填进
+  `tools.imageGen.providerId`，否则升级后 `image_gen` 会突然"未配置"。
+- `publicConfig()`（`present.ts:8`）同时返回 providers 与 imageProviders，前端两个页面都读它；
+  拆页面不拆接口，避免多一次请求与两个真相。
+
+验收：Tools 页能选图像提供商并保存；选中的那个才被 `image_gen` 使用（把另一个也启用、且排在前面，
+验证不再"挑第一个"）；未选择时 `image_gen` 报"未配置"而不是静默用错提供商。
+
+### 决策待定（开工前先定）
+
+1. 管理员名单为空时是"没人能用"还是"所有人能用"——建议前者，但要在 UI 上说清楚。
+2. 备用模型是否覆盖限流/超时，还是只覆盖"不可用"。
+3. 首页"API 成功率""平均耗时"两张卡：删掉还是换指标。
+4. 图像提供商：按推荐方案（保留 `imageProviders[]` + 新增 `tools.imageGen.providerId`），
+   还是彻底对齐 web_search 结构（要写迁移，且丢掉自定义 baseUrl/model）。
 
 ---
 
