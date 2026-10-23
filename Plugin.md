@@ -643,8 +643,8 @@ Agent 主动发言是 Agent 行为策略，插件定时任务是通用调度机�
 
 **前置：管理面安全（✅ 2026-10-22 已完成，见 §13）。**
 
-- [ ] 插件列表、状态、启停、错误与版本展示。
-- [ ] Schema Config 表单生成、校验、secret 遮蔽、重启提示。
+- [x] 插件列表、状态、启停、错误与版本展示（`apps/web/src/pages/Plugins.tsx` + `POST /api/plugins/:id/{enable,disable,reload}`）；顺带展示插件注册的 Agent 工具名与对话钩子名。
+- [ ] Schema Config 表单生成、校验、secret 遮蔽、重启提示。**← 下一件（P0）**
 - [ ] 独立 WebUI 入口登记、停止时撤销与远程地址提示。
 - [ ] 本地可信包安装 / 卸载（保留与删除数据区分）。
 

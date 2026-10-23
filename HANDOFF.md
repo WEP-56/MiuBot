@@ -1,7 +1,14 @@
-# 交接文档：Plugin 模块（阶段 A / B / C 均已完成）
+# 交接文档：Plugin 模块（阶段 A / B / C 主体已完成）
 
 > 用途：因会话上下文过长，在新会话继续开发时先读这份。
-> 最后更新：2026-10-23 09:10
+> 最后更新：2026-10-23 10:20
+
+**第一次读这份时按这个顺序：**
+
+1. §一 当前状态 —— 已推到哪、门禁是否绿
+2. **§五.0 下一步候选** —— 从里面挑一件开工，别再回头重做已完成的部分
+3. §三 关键设计决策 —— 动手前必须知道哪些是刻意如此的
+4. 相关工作区 §二 代码位置 + §六 已知遗留
 
 ---
 
@@ -9,9 +16,11 @@
 
 **阶段 A（事件型插件）、阶段 B（插件注册 Agent Tool + Pi Extension 钩子）、阶段 C（管理 API + 工作台插件页）均已完成并推送。** 管理面安全与 `index.ts` 职责拆分也已就绪（2160 → 约 215 行）。
 
+**插件闭环现在是完整的**：事件订阅 / 发消息 / 存储 / Agent Tool / 对话钩子五条能力都有权限、代次、`bots` 作用域三道校验，启停即生效（重建会话），失败都写进插件状态或运行日志。剩下的活是**配置面**（Schema Config）、**分发面**（安装/卸载、独立 WebUI）和几只遗留 P2。
+
 验证门禁全绿：`npm run check` / `npm run lint` / `npm test`（**189 files / 1777 tests**）。
 
-最近七次提交：
+最近八次提交：
 
 | commit | 内容 |
 |---|---|
@@ -24,7 +33,7 @@
 | `d08d0f7` | fix(plugin): 收紧生命周期与能力撤销 |
 | `c7c956d` | feat(plugin): 服务级 Plugin Host 与受控平台能力 |
 
-### index.ts 拆分（本次完成）
+### index.ts 拆分（已完成）
 
 `index.ts` 现在只剩路径常量、子系统装配、启动流程，约 220 行。其余按职责落到：
 
@@ -132,7 +141,24 @@
 
 ---
 
-## 五、下一步：阶段 C
+## 五、各阶段落地明细 + 下一步
+
+### 0. 下一步候选（都**未开工**，按建议顺序）
+
+挑一件开工；下面的 1–5 小节是已完成的记录，只用来查落点和约束，不要重做。
+
+| 优先级 | 事项 | 落点 / 前置 | 备注 |
+|---|---|---|---|
+| **P0** | **插件 Schema Config**：manifest 声明配置项 → 工作台渲染表单 → 插件读配置 | `manifest.ts` 加 `config` 声明校验；`context.ts` 新增 `ctx.config`（**尚不存在**）；`Plugins.tsx` 加表单；`plugins.ts` 加读写端点 | 阶段 C 第 2 项。secret 要遮蔽、改动要提示重启。**`miubot.welcome` 目前把欢迎语存在插件自己的 storage 里，就是等这个** |
+| P1 | 本地可信包安装 / 卸载（保留数据与删除数据区分） | 依赖上一条的 manifest 校验固化下来 | 范围冻结仍然有效：不做网页上传、远程安装、插件市场 |
+| P1 | `hasActiveHandler()` 支持按按钮归属判断 | `host.ts` + `platform/qq-adapter.ts` 的 `canHandleInteraction` | 遗留 P1。现在只回答「有没有人在听」，回答不了「这个 `buttonId` 是不是你的」 |
+| P2 | 启停不再无条件重建会话 | `routes/plugins.ts` + `agentHost.anyAgentLoopRunning()` | 流式回复会被打断。可改为「有 loop 在跑就延后到空闲」 |
+| P2 | `inboundReferences.take()` 改引用计数 | `platform/plugin-bridge.ts` | 同一入站消息多插件回复时只有第一个拿到被动回复锚点。**会改变被动回复配额语义，先定语义再改** |
+| P2 | `storage.readAll()` 不再吞解析错误 | `host/storage.ts` | 损坏文件下次写入会被覆盖。**抛错会影响容错策略，先定策略** |
+| P2 | 补一次最小 `session.bindExtensions()` | `agent-host.ts` | 让 `session_start` / `resources_discover` 对插件可用；没插件需要之前不必做 |
+| P3 | 独立 WebUI 入口登记、插件后台任务/调度、精细审计 | — | 阶段 D，按真实需求再评估，不预先建设 |
+
+选 P0 那条时的提醒：Schema Config 会牵动三处（manifest 校验、运行时 `ctx.config` 注入、工作台表单），**先把 manifest 的 `config` 结构定死再写代码**，否则三处会各自演化出不同的形状。
 
 ### 1. 管理面安全（✅ 已完成，阻塞项已解除）
 
@@ -158,13 +184,13 @@
 - `PluginStatus` 新增 `source: "plugin" | "invalid" | "duplicate"`：后两者是诊断占位（坏目录 / 同 id 冲突），启停被拒并回 400。
 - `PluginHost` 新增 `reload()`：改名/改版本/改权限/改入口不必重启进程。`id` 变了只报错要求重启，不悄悄搬迁条目。
 - 修掉一个潜在缺陷：`discover()` 原先不幂等，第二次扫描会把每个已登记插件判成「重复」。现在同目录重扫直接跳过。
-- 单测 `apps/server/test/plugins-route.test.ts`（13 项），已按 §九 做过反向验证（去掉幂等跳过、去掉 manifest 重读后测试转红）。
+- 单测 `apps/server/test/plugins-route.test.ts`（15 项，含插件注册的工具名与钩子名展示），已按 §九 做过反向验证（去掉幂等跳过、去掉 manifest 重读后测试转红）。
 
 ### 3. Web 工作台插件页（✅ 已完成）
 
 `apps/web/src/pages/Plugins.tsx`，入口在侧边栏「高级配置 → 插件」（`extensions` 页签，原占位内容已删除）。
 
-列表展示名称/版本/状态/权限/清理函数数/错误；按钮为启用 / 停用 / 重载（禁用条目上重载置灰），顶部「重新扫描」，底部显示插件目录与配置中的禁用清单。
+列表展示名称/版本/状态/权限/清理函数数/错误，以及该插件注册的 Agent 工具（绿色 chip）与对话钩子（sky 色 chip）；按钮为启用 / 停用 / 重载（禁用条目上重载置灰），顶部「重新扫描」，底部显示插件目录与配置中的禁用清单。
 
 ### 4. 阶段 B：插件注册 Agent Tool（✅ 已完成）
 
@@ -272,3 +298,11 @@ P2 里两项需要先确认语义再动：`take()` 改为引用计数会改变�
 - 把 `serialize()` 改成直接执行 → 确认并发 `setup` 真会重复
 
 这样能避免写出「永远通过」的假测试。
+
+### 测试插件相关功能时的两个坑（2026-10-23 踩过）
+
+1. **`before_agent_start` 只在 agent loop 里派发，建会话时不触发。** 想证明「插件钩子真的注册上了」，不要数钩子被调用的次数——断言 `session.extensionRunner.hasHandlers("agent_start")`，再直接 `await runner.emit({ type: "agent_start" })`。
+   挑事件时注意：`before_agent_start` / `tool_call` / `message_end` / `context` 等走专用 `emitXxx()`，不在通用 `emit()` 的联合类型里；能通用派发又载荷极简的是 `agent_start`（无字段）和 `agent_end`（只要 `messages`）。
+2. **「工厂抛错」必须写在工厂体里。** 写进 `pi.on(...)` 的回调体就变成运行期错误，扩展照样装载成功、测试会假绿。
+3. 相关地：`PluginStatus.tools` / `.extensions` 给的是 `namesOf()` 的**短名**，`list()` 才返回完整路径（`plugin:{id}/{name}`）。
+4. 想验「会话照常可用」这类空集断言，先 `config.tools.enabled = []`——`createDefaultConfig()` 默认带 `["web_search"]`。
