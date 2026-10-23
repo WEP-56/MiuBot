@@ -4,7 +4,6 @@ type SessionSummary = { id: string; scope: "group" | "c2c"; peerId: string; peer
 type SessionMessage = { role: "user" | "assistant"; content: string; sender?: string; timestamp: string };
 type SessionDetail = SessionSummary & { summary: string; messages: SessionMessage[] };
 type PeerConfig = { botId: string; scope: "group" | "c2c"; peerId: string; name: string; personaId: string; providerId: string; modelId: string; useTools: boolean; features: { activeReply: boolean } };
-type Peer = PeerConfig & { key: string; sessions: SessionSummary[]; updatedAt: string };
 type ConfigOptions = { personas: Array<{ id: string; name: string }>; providers: Array<{ id: string; name: string; models: Array<{ id: string; name: string }> }> };
 type BotOption = { id: string; nickname: string };
 
