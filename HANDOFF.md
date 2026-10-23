@@ -1,7 +1,7 @@
 # 交接文档：Plugin 模块（阶段 A / B / C 主体已完成）
 
 > 用途：因会话上下文过长，在新会话继续开发时先读这份。
-> 最后更新：2026-10-23 10:20
+> 最后更新：2026-10-23 11:05
 
 **第一次读这份时按这个顺序：**
 
@@ -16,9 +16,11 @@
 
 **阶段 A（事件型插件）、阶段 B（插件注册 Agent Tool + Pi Extension 钩子）、阶段 C（管理 API + 工作台插件页）均已完成并推送。** 管理面安全与 `index.ts` 职责拆分也已就绪（2160 → 约 215 行）。
 
-**插件闭环现在是完整的**：事件订阅 / 发消息 / 存储 / Agent Tool / 对话钩子五条能力都有权限、代次、`bots` 作用域三道校验，启停即生效（重建会话），失败都写进插件状态或运行日志。剩下的活是**配置面**（Schema Config）、**分发面**（安装/卸载、独立 WebUI）和几只遗留 P2。
+**阶段 C 的 Schema Config 已完成（2026-10-23，尚未提交）**：manifest 声明 `config` → 宿主校验并合成默认值 → 工作台渲染表单 → 插件从 `ctx.config` 读。`miubot.welcome` 已从「把欢迎语存在插件存储里」迁到 manifest 配置。
 
-验证门禁全绿：`npm run check` / `npm run lint` / `npm test`（**189 files / 1777 tests**）。
+**插件闭环现在是完整的**：事件订阅 / 发消息 / 存储 / Agent Tool / 对话钩子五条能力都有权限、代次、`bots` 作用域三道校验，启停即生效（重建会话），失败都写进插件状态或运行日志；配置面（Schema Config）也已接通。剩下的活是**分发面**（安装/卸载、独立 WebUI）和几只遗留 P2。
+
+验证门禁全绿：`npm run check` / `npm run lint` / `npm test`（**190 files / 1813 tests**）。
 
 最近八次提交：
 
@@ -95,6 +97,7 @@
 | `manifest.ts` | `miubot.plugin.json` 校验（`schemaVersion`、id、版本、entry 逃逸、权限、bots） |
 | `lifecycle.ts` | `AbortController` + disposers 栈（LIFO）+ 运行代次 |
 | `context.ts` | 插件能力包装：代次 / 权限 / Bot 范围三重校验 |
+| `config.ts` | Schema Config：声明校验、默认值合成、输入校验、文件读写、`ctx.config` 访问器 |
 | `loader.ts` | `.ts` 走 jiti；`.js`/`.mjs`/`.cjs` 走原生 `import()` |
 | `storage.ts` | 每插件一个 JSON 文件，串行化写入 |
 | `rate-limit.ts` | 出站滑动窗口限流 |
@@ -121,6 +124,11 @@
 8. **启停按插件 id 串行化**（`serialize()`），不加全局锁，不同插件互不阻塞。
 9. **插件入口不需要 `language` 字段**，`entry` 后缀已表达。
 10. **`enabled: []` 表示全部启用**，`disabled` 优先。装好插件却毫无反应比误启用更难排查。
+11. **配置只存与默认值不同的键**（`compactAgainstDefaults()`）。全量落盘会把旧默认值永久钉在用户身上，插件以后改默认值就只对新人生效。
+12. **配置 schema 只支持扁平一层标量**（string / number / integer / boolean + enum）。嵌套 object / array 会让表单渲染、错误定位、secret 遮蔽同时变复杂，等真有插件需要再扩，不先支持一半。
+13. **secret 是三态语义**：缺省/空串 = 保持原值，`null` = 清除，有值 = 覆盖。遮蔽在宿主 `inspectConfig()` 完成，不在路由——多一个入口（CLI、别的前端）时不该靠每个调用方各自记得处理。
+14. **保存配置后重启插件**（不是重启服务）。配置在 `setup()` 里读，重启才能生效；已停用的插件不会被顺带拉起。重启会让工具以新代次注册，**必须跟着 `rebuildAgentSessions()`**，否则旧会话里的插件工具一调用就被判失效。
+15. **schema 写错 = 插件加载失败**，用户填错 = 保存失败。两者分开：放行一个坏 schema 会让工作台渲染出半截表单，而报错落在「保存失败」上。
 
 ---
 
@@ -129,7 +137,8 @@
 - 内置插件：`<repo>/plugins/`（仓库内，随代码分发）
 - 用户插件：`apps/server/.miubot/plugins/`
 - **内置优先**：`pluginsDir: [builtinPluginsDir, pluginsDir]`，同名 id 只认第一个，冲突登记为 `duplicate:*` 诊断条目
-- 插件数据：`apps/server/.miubot/plugin-data/<id>.json`
+- 插件业务数据：`apps/server/.miubot/plugin-data/<id>.json`
+- 插件配置：`apps/server/.miubot/plugin-config/<id>.json`（与数据分开：卸载时「保留数据」不该顺手保住配置）
 
 配置（`apps/server/.miubot/config.json`）：
 
@@ -145,12 +154,11 @@
 
 ### 0. 下一步候选（都**未开工**，按建议顺序）
 
-挑一件开工；下面的 1–5 小节是已完成的记录，只用来查落点和约束，不要重做。
+挑一件开工；下面的 1–6 小节是已完成的记录，只用来查落点和约束，不要重做。**当前已无 P0。**
 
 | 优先级 | 事项 | 落点 / 前置 | 备注 |
 |---|---|---|---|
-| **P0** | **插件 Schema Config**：manifest 声明配置项 → 工作台渲染表单 → 插件读配置 | `manifest.ts` 加 `config` 声明校验；`context.ts` 新增 `ctx.config`（**尚不存在**）；`Plugins.tsx` 加表单；`plugins.ts` 加读写端点 | 阶段 C 第 2 项。secret 要遮蔽、改动要提示重启。**`miubot.welcome` 目前把欢迎语存在插件自己的 storage 里，就是等这个** |
-| P1 | 本地可信包安装 / 卸载（保留数据与删除数据区分） | 依赖上一条的 manifest 校验固化下来 | 范围冻结仍然有效：不做网页上传、远程安装、插件市场 |
+| P1 | 本地可信包安装 / 卸载（保留数据与删除数据区分） | `manifest.ts` 的校验现已固化，可直接复用 | 范围冻结仍然有效：不做网页上传、远程安装、插件市场 |
 | P1 | `hasActiveHandler()` 支持按按钮归属判断 | `host.ts` + `platform/qq-adapter.ts` 的 `canHandleInteraction` | 遗留 P1。现在只回答「有没有人在听」，回答不了「这个 `buttonId` 是不是你的」 |
 | P2 | 启停不再无条件重建会话 | `routes/plugins.ts` + `agentHost.anyAgentLoopRunning()` | 流式回复会被打断。可改为「有 loop 在跑就延后到空闲」 |
 | P2 | `inboundReferences.take()` 改引用计数 | `platform/plugin-bridge.ts` | 同一入站消息多插件回复时只有第一个拿到被动回复锚点。**会改变被动回复配额语义，先定语义再改** |
@@ -158,7 +166,8 @@
 | P2 | 补一次最小 `session.bindExtensions()` | `agent-host.ts` | 让 `session_start` / `resources_discover` 对插件可用；没插件需要之前不必做 |
 | P3 | 独立 WebUI 入口登记、插件后台任务/调度、精细审计 | — | 阶段 D，按真实需求再评估，不预先建设 |
 
-选 P0 那条时的提醒：Schema Config 会牵动三处（manifest 校验、运行时 `ctx.config` 注入、工作台表单），**先把 manifest 的 `config` 结构定死再写代码**，否则三处会各自演化出不同的形状。
+下一步如果做安装/卸载，注意配置与数据现在分在两个目录（`plugin-config/` 与 `plugin-data/`），
+「保留数据」和「保留配置」得分别给选项，不要一个开关管两件事。
 
 ### 1. 管理面安全（✅ 已完成，阻塞项已解除）
 
@@ -231,6 +240,45 @@
 - **作用域**：manifest `bots` 决定哪些 Bot 的会话装载该扩展；停用后 `removeOwner()` 清空，重建会话才生效（与工具同一条策略）。
 - 守卫每次装载重新包一层（`factory: (pi) => registration.factory(guard(pi))`），不缓存到登记对象上，避免改名后守卫文案串号。
 - 测试：`packages/plugin/test/plugin-extensions.test.ts`（9 项，注册表语义）+ `apps/server/test/plugin-extension-session.test.ts`（4 项，真实 `DefaultResourceLoader` + 真实 `createAgentSession`）。会话侧断言落在 `session.extensionRunner.hasHandlers(...)` 与直接 `emit()` 上——`agent_start` / `agent_end` 载荷极简，不需要真实模型请求就能验证「handler 进了运行器且派发时插件代码真的执行」。
+
+### 6. 阶段 C 第 2 项：Schema Config（✅ 2026-10-23，尚未提交）
+
+| 文件 | 职责 |
+|---|---|
+| `packages/plugin/src/host/config.ts` | schema 类型、schema 自身校验、默认值合成、输入校验、`compactAgainstDefaults`、文件读写、`ctx.config` 访问器 |
+| `packages/plugin/src/host/manifest.ts` | 解析并校验 `config` 声明；schema 非法 → manifest 非法（带精确字段） |
+| `packages/plugin/src/host/context.ts` | `ctx.config`（`all()` / `get<T>()`），与其它能力同一条代次守卫 |
+| `packages/plugin/src/host/host.ts` | `configFor` 注入、`PluginStatus.hasConfig`、`config.inspect/save/schemaOf` |
+| `apps/server/src/http/routes/plugins.ts` | `GET` / `PUT /api/plugins/:id/config`；保存后重启运行中的插件并重建会话 |
+| `apps/web/src/pages/Plugins.tsx` | 按 `x-ui.group` 分组的表单；布尔走开关、枚举走 select、`secret` 走密码框 + 清除 |
+| `plugins/miubot.welcome/` | 迁移到 `config.welcomeText`，去掉 storage 里的欢迎语默认值（版本升到 0.2.0） |
+
+manifest 声明形状（**扁平一层标量**，`x-ui` 只影响渲染）：
+
+```json
+"config": {
+  "type": "object",
+  "properties": {
+    "welcomeText": {
+      "type": "string", "title": "欢迎语", "default": "…",
+      "minLength": 1, "maxLength": 500,
+      "x-ui": { "widget": "textarea", "group": "消息设置" }
+    },
+    "apiKey": { "type": "string", "secret": true }
+  },
+  "required": ["welcomeText"]
+}
+```
+
+要点：
+
+- **支持子集**：`type`（string/number/integer/boolean）、`enum`、`default`、`required`、`min/maxLength`、`min/maximum`、`secret`、`x-ui{widget,placeholder,group}`。不支持嵌套、数组、pattern。
+- **容错策略分两层**：schema 写错 → 插件加载失败；磁盘上的值不符合 schema（插件改了字段类型、文件被手改）→ 静默退回默认值，**不动磁盘上的原值**，插件照样能起来。
+- **插件侧只读**。写入是管理面动作：允许插件在运行时改自己被管理员配置的值，会出现「界面显示 A、实际跑 B」。
+- **未知键在保存时静默丢弃**：schema 删掉字段后旧前端仍可能带着它，为此让保存失败只会挡住与它无关的修改。
+- **`ctx.config` 不设权限位**：插件只能读自己的配置，声明 `config` 本身就是授权。加一个 `config:read` 只会让「声明了 schema 却忘加权限、读到的永远是空对象」变成常见故障。
+- 测试：`packages/plugin/test/plugin-config.test.ts`（27 项，含真实宿主 + 真实 `.ts` 入口的端到端：保存 → 重启 → 插件读到新值）+ `apps/server/test/plugins-route.test.ts` 新增 9 项（secret 不回显、校验失败不落盘、停用插件不自启）。
+- 已按 §九 做过反向验证：去掉 `inspectConfig` 的 secret 剔除 → 密钥漏进响应，测试转红；把 `compactAgainstDefaults` 换成全量写入 → 默认值被钉死，测试转红。
 
 ---
 
