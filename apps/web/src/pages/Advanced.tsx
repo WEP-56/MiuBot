@@ -203,35 +203,71 @@ export function Scheduler() {
   );
 }
 
-/* 运行日志 */
+/* 运行日志 / 审计日志 */
 export function Logs() {
+  const [tab, setTab] = useState<"runtime" | "audit">("runtime");
   const [logs, setLogs] = useState<Array<{ time: string; level: "INFO" | "WARN" | "ERROR"; sessionId?: string; text: string }>>([]);
-  useEffect(() => { const load = () => { void fetch("/api/logs").then((response) => response.json()).then((data: { logs: typeof logs }) => setLogs(data.logs)).catch(() => {}); }; load(); const timer = window.setInterval(load, 2500); return () => window.clearInterval(timer); }, []);
+  const [entries, setEntries] = useState<Array<{ at: string; action: string; actor: string; detail: string }>>([]);
+  useEffect(() => {
+    if (tab !== "runtime") return;
+    const load = () => { void fetch("/api/logs").then((response) => response.json()).then((data: { logs: typeof logs }) => setLogs(data.logs)).catch(() => {}); };
+    load();
+    const timer = window.setInterval(load, 2500);
+    return () => window.clearInterval(timer);
+  }, [tab]);
+  useEffect(() => {
+    if (tab !== "audit") return;
+    const load = () => { void fetch("/api/audit?limit=200").then((response) => response.json()).then((data: { entries: typeof entries }) => setEntries(data.entries)).catch(() => {}); };
+    load();
+    const timer = window.setInterval(load, 15000);
+    return () => window.clearInterval(timer);
+  }, [tab]);
 
   return (
     <div className="flex-1 h-full overflow-y-auto bg-black text-white p-7 select-none">
       <div className="max-w-[760px] space-y-4">
         <div className="flex items-start justify-between pb-1">
           <div>
-            <h1 className="text-[20px] font-bold text-white tracking-tight">运行日志</h1>
-            <p className="text-[13px] text-[#777777] mt-0.5">消息记录、事件日志、Agent 执行跟踪与系统日志</p>
+            <h1 className="text-[20px] font-bold text-white tracking-tight">{tab === "runtime" ? "运行日志" : "审计日志"}</h1>
+            <p className="text-[13px] text-[#777777] mt-0.5">{tab === "runtime" ? "消息记录、事件日志、Agent 执行跟踪与系统日志" : "登录、改密与所有变更类管理请求；与运行日志分开存放，不会被日常日志冲掉"}</p>
           </div>
-          <button className="btn-pill-dark" onClick={() => { const blob = new Blob([logs.map((item) => JSON.stringify(item)).join("\n")], { type: "application/x-ndjson" }); const anchor = document.createElement("a"); anchor.href = URL.createObjectURL(blob); anchor.download = "miubot-runtime.log"; anchor.click(); URL.revokeObjectURL(anchor.href); }}>
-            <span>导出日志</span>
-          </button>
+          {tab === "runtime" && (
+            <button className="btn-pill-dark" onClick={() => { const blob = new Blob([logs.map((item) => JSON.stringify(item)).join("\n")], { type: "application/x-ndjson" }); const anchor = document.createElement("a"); anchor.href = URL.createObjectURL(blob); anchor.download = "miubot-runtime.log"; anchor.click(); URL.revokeObjectURL(anchor.href); }}>
+              <span>导出日志</span>
+            </button>
+          )}
         </div>
 
-        <div className="sketch-card p-4 font-mono text-[12px] space-y-2">
-          {logs.length === 0 && <p className="py-6 text-center text-sm" style={{ color: "var(--text-muted)" }}>暂无运行日志</p>}
-          {logs.map((l, i) => (
-            <div key={i} className="flex items-center gap-3 py-1 border-b border-[rgba(255,255,255,0.03)]">
-              <span className="shrink-0 text-[#666666]">{new Date(l.time).toLocaleString()}</span>
-              <span className={l.level === "ERROR" ? "text-red-400" : l.level === "WARN" ? "text-[#f59e0b]" : "text-[#22c55e]"}>{l.level}</span>
-              <span className="max-w-28 shrink-0 truncate text-[#888888]">{l.sessionId ?? "server"}</span>
-              <span className="min-w-0 flex-1 whitespace-pre-wrap text-white">{l.text}</span>
-            </div>
-          ))}
+        <div className="flex gap-2">
+          <button className={`btn-pill-dark${tab === "runtime" ? " active" : ""}`} onClick={() => setTab("runtime")}>运行日志</button>
+          <button className={`btn-pill-dark${tab === "audit" ? " active" : ""}`} onClick={() => setTab("audit")}>审计日志</button>
         </div>
+
+        {tab === "runtime" ? (
+          <div className="sketch-card p-4 font-mono text-[12px] space-y-2">
+            {logs.length === 0 && <p className="py-6 text-center text-sm" style={{ color: "var(--text-muted)" }}>暂无运行日志</p>}
+            {logs.map((l, i) => (
+              <div key={i} className="flex items-center gap-3 py-1 border-b border-[rgba(255,255,255,0.03)]">
+                <span className="shrink-0 text-[#666666]">{new Date(l.time).toLocaleString()}</span>
+                <span className={l.level === "ERROR" ? "text-red-400" : l.level === "WARN" ? "text-[#f59e0b]" : "text-[#22c55e]"}>{l.level}</span>
+                <span className="max-w-28 shrink-0 truncate text-[#888888]">{l.sessionId ?? "server"}</span>
+                <span className="min-w-0 flex-1 whitespace-pre-wrap text-white">{l.text}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="sketch-card p-4 text-[12px] space-y-2">
+            {entries.length === 0 && <p className="py-6 text-center text-sm" style={{ color: "var(--text-muted)" }}>暂无审计记录</p>}
+            {entries.map((entry, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-3 py-1 border-b border-[rgba(255,255,255,0.03)]">
+                <span className="shrink-0 font-mono text-[#666666]">{new Date(entry.at).toLocaleString()}</span>
+                <span className={entry.action.includes("failed") || entry.action.includes("locked") ? "text-[#f59e0b]" : "text-[#22c55e]"}>{entry.action}</span>
+                <span className="min-w-0 flex-1 break-all text-white">{entry.detail}</span>
+              </div>
+            ))}
+            <p className="pt-2 text-[11px] text-[#666666]">文件：数据目录下的 audit.log（JSON Lines，10 MB × 3 轮转）。</p>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -322,6 +358,69 @@ function VersionCard() {
   );
 }
 
+/* 入站白名单：谁能触发 Agent。空 = 不限制 */
+function AccessCard() {
+  const [text, setText] = useState("");
+  const [source, setSource] = useState<"env" | "config">("config");
+  const [peers, setPeers] = useState<Array<{ scope: string; peerId: string; name: string }>>([]);
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
+  const load = async () => {
+    const [access, peerList] = await Promise.all([
+      fetch("/api/access").then((response) => response.json() as Promise<{ allowedPeers: string[]; source: "env" | "config" }>),
+      fetch("/api/peers").then((response) => response.json() as Promise<{ peers: Array<{ scope: string; peerId: string; name: string }> }>),
+    ]);
+    setText(access.allowedPeers.join("\n"));
+    setSource(access.source);
+    setPeers(peerList.peers);
+  };
+  useEffect(() => { void load().catch(() => {}); }, []);
+  const keys = text.split("\n").map((line) => line.trim()).filter(Boolean);
+  const add = (key: string) => { if (!keys.includes(key)) setText([...keys, key].join("\n")); };
+  const save = async () => {
+    setBusy(true); setNotice("");
+    try {
+      const response = await fetch("/api/access", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ allowedPeers: keys }) });
+      const payload = await response.json() as { message?: string; allowedPeers?: string[] };
+      if (!response.ok) { setNotice(payload.message ?? `保存失败（HTTP ${response.status}）`); return; }
+      setText((payload.allowedPeers ?? []).join("\n"));
+      setNotice(keys.length ? `已保存 ${keys.length} 个会话` : "已清空：不限制谁能触发");
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : String(cause));
+    } finally { setBusy(false); }
+  };
+  const candidates = peers
+    .map((peer) => ({ key: `${peer.scope}:${peer.peerId}`, name: peer.name }))
+    .filter((item) => !keys.includes(item.key));
+  return (
+    <div className="sketch-card p-5 space-y-3">
+      <div className="text-[14px] font-bold text-white">入站白名单</div>
+      <p className="text-[12px] text-[#888888]">
+        只有列在这里的群 / 私聊能触发 Agent；留空表示不限制。公网部署下这是「谁能用这个 Bot」的唯一执行点——
+        群成员的一条消息就是 Agent 的输入，白名单之外的消息会被直接忽略，也不回复（回复本身等于确认 Bot 在线）。
+      </p>
+      <textarea className="sketch-input w-full font-mono text-[12px]" rows={5} value={text} disabled={source === "env"} onChange={(event) => setText(event.target.value)} placeholder={"group:1234567890\nc2c:abcdefghij"} spellCheck={false} />
+      {source === "env" && <p className="text-[12px] text-[#f59e0b]">当前由 MIUBOT_ALLOWED_PEERS 环境变量指定，这里只读。</p>}
+      {candidates.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-[11px] text-[#777777]">已出现过的会话（点一下加入）：</p>
+          <div className="flex flex-wrap gap-2">
+            {candidates.slice(0, 12).map((item) => (
+              <button key={item.key} className="btn-pill-dark text-[11px]" disabled={source === "env"} onClick={() => add(item.key)}>
+                {item.name} · {item.key}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="flex items-center gap-3">
+        <button className="btn-pill-dark" disabled={busy || source === "env"} onClick={() => void save()}>{busy ? "保存中…" : "保存白名单"}</button>
+        {notice && <span className="text-[12px] text-[#aaaaaa]" role="status">{notice}</span>}
+      </div>
+    </div>
+  );
+}
+
 /* 设置 */
 export function Settings() {
   const { theme, setTheme } = useTheme();
@@ -397,6 +496,8 @@ export function Settings() {
 
         <VersionCard />
 
+        <AccessCard />
+
         <div className="sketch-card p-5 space-y-3">
           <div className="text-[14px] font-bold text-white">存储管理</div>
           <div className="space-y-2 text-[13px] text-[#888888]">
@@ -420,7 +521,7 @@ export function Settings() {
   );
 }
 
-type ToolEntry = { name: string; label: string; description: string; enabled: boolean };
+type ToolEntry = { name: string; label: string; description: string; enabled: boolean; native?: boolean };
 type SearchProvider = "tavily" | "brave" | "exa" | "serper";
 const searchProviders: Array<{ id: SearchProvider; label: string }> = [
   { id: "tavily", label: "Tavily" }, { id: "brave", label: "Brave Search" }, { id: "exa", label: "Exa" }, { id: "serper", label: "Serper" },
@@ -436,6 +537,8 @@ export function Tools() {
   const [apiKey, setApiKey] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  /** 已启用的文件与命令类工具：公网部署下最该被看见的一行。 */
+  const riskyTools = tools.filter((tool) => tool.native && tool.enabled).map((tool) => tool.name);
 
   useEffect(() => {
     void fetch("/api/tools").then((response) => response.json()).then((data: { tools: ToolEntry[]; mcpEnabled: boolean; skillsEnabled: boolean; stickersEnabled: boolean; webSearch: { provider: SearchProvider; configuredProviders: Record<SearchProvider, boolean> } }) => {
@@ -457,6 +560,10 @@ export function Tools() {
   return <div className="flex-1 h-full overflow-y-auto bg-black text-white p-7">
     <div className="max-w-[760px] space-y-4">
       <div><h1 className="text-[20px] font-bold">Tools</h1><p className="text-[13px] text-[#777777] mt-0.5">Pi Agent 工具与网页搜索</p></div>
+      {riskyTools.length > 0 && <article className="sketch-card p-4 space-y-1" style={{ borderColor: "#7f1d1d" }}>
+        <div className="text-[13px] font-bold text-[#f87171]">已启用文件与命令类工具：{riskyTools.join("、")}</div>
+        <p className="text-xs text-[#888888]">这些工具能读写服务器文件、执行命令，而入口是「任何能给 Bot 发消息的人」——一条精心构造的消息就是一次提示注入，注入成功即 RCE。公网部署请关掉它们；需要留一条保险丝时，设 <code className="text-[#cccccc]">MIUBOT_DISABLE_NATIVE_TOOLS=1</code> 会在会话里整体禁用这一组（配置不变，重启后生效）。</p>
+      </article>}
       <article className="sketch-card flex items-center justify-between gap-4 p-4"><div><div className="font-semibold">MCP tools<code className="ml-2 text-xs text-[#888888]">mcp__*</code></div><p className="mt-1 text-xs text-[#888888]">全局控制已连接 MCP 服务器提供的工具；服务器连接状态在 MCP 页面单独管理。</p></div><label className="flex shrink-0 items-center gap-2 text-sm"><input type="checkbox" checked={mcpEnabled} disabled={busy} onChange={(event) => { setMcpEnabled(event.target.checked); void save(tools, provider, "", event.target.checked); }}/>启用</label></article>
       <article className="sketch-card flex items-center justify-between gap-4 p-4"><div><div className="font-semibold">Skills</div><p className="mt-1 text-xs text-[#888888]">发现技能指令并允许 Agent 按名称加载匹配的 Skill。</p></div><label className="flex shrink-0 items-center gap-2 text-sm"><input type="checkbox" checked={skillsEnabled} disabled={busy} onChange={(event) => { setSkillsEnabled(event.target.checked); void save(tools, provider, "", mcpEnabled, event.target.checked); }}/>启用</label></article>
       <article className="sketch-card flex items-center justify-between gap-4 p-4"><div><div className="font-semibold">表情包 tools</div><p className="mt-1 text-xs text-[#888888]">允许 Agent 搜索并发送已审核表情；还需在会话对象配置中授权。</p></div><label className="flex shrink-0 items-center gap-2 text-sm"><input type="checkbox" checked={stickersEnabled} disabled={busy} onChange={(event) => { setStickersEnabled(event.target.checked); void save(tools, provider, "", mcpEnabled, skillsEnabled, event.target.checked); }}/>启用</label></article>
