@@ -1,0 +1,43 @@
+# Miubot 生产部署参考配置
+#
+# 安装位置：/etc/systemd/system/miubot.service
+# 环境变量：/etc/miubot/miubot.env（见 miubot.env.example，权限 0600）
+#
+# 要点：
+# - `User=miubot` 不要用 root。插件是**本进程内的任意 Node 代码**，跑在哪个用户下
+#   就等于把那个用户交出去。
+# - `ProtectSystem=strict` + `ReadWritePaths` 只放开数据目录：插件想写 /etc 会直接失败。
+# - `ExecStart` 直接跑 `.ts`：靠 Node ≥ 22.19 的原生类型擦除 + `--conditions=source`
+#   解析 workspace 包源码，没有构建步骤。改完 `git pull` 重启即可——也就意味着
+#   线上跑的是源码，别在服务器上改文件。
+
+[Unit]
+Description=Miubot QQ Bot workspace
+Documentation=file:/opt/miubot/deploy.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=miubot
+Group=miubot
+WorkingDirectory=/opt/miubot/apps/server
+Environment=NODE_ENV=production
+EnvironmentFile=-/etc/miubot/miubot.env
+ExecStart=/usr/bin/node --conditions=source --enable-source-maps src/index.ts
+Restart=always
+RestartSec=3
+# 应用自己处理 SIGTERM：断开 QQ Gateway、落盘会话、关 HTTP 端口。
+KillSignal=SIGTERM
+TimeoutStopSec=20
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/miubot
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

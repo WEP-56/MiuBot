@@ -1,0 +1,17 @@
+# Caddy 反代（由 compose 的 tls profile 挂载到 /etc/caddy/Caddyfile）。
+#
+# 自动为 {$MIUBOT_DOMAIN} 申请并续期 Let's Encrypt 证书；证书存在 caddy-data 卷里。
+# 不需要手动配证书路径，也不需要额外调超时（Caddy 对上游默认不设响应超时，
+# 同步模型调用几十秒也不会被掐断）。
+
+{$MIUBOT_DOMAIN} {
+	encode zstd gzip
+
+	# 显式保留原始 Host：应用按 MIUBOT_ALLOWED_HOSTS 校验 Host（防 DNS rebinding）。
+	# 千万不要写成 `header_up Host miubot:8787` —— 那等于关掉这道校验。
+	reverse_proxy miubot:8787 {
+		header_up Host {host}
+	}
+
+	# 应用自己会发 CSP / HSTS / nosniff / frame-ancestors，这里不重复。
+}

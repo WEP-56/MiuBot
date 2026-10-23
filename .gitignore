@@ -12,6 +12,9 @@ apps/server/.miubot/
 packages/provider/src/providers/data/
 packages/provider/src/providers/.model-generation-*/
 
+# Release metadata written by CI when packaging (never committed)
+VERSION
+
 # Environment
 .env
 

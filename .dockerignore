@@ -1,0 +1,37 @@
+# 构建上下文裁剪：只留运行/构建真正需要的东西。
+# 注意**不要**排除 packages/provider/src/providers/data —— 它是生成物，
+# 由 Dockerfile 里的 `npm run generate:model-data` 在镜像内重新生成。
+
+.git
+.github
+.gitignore
+.gitattributes
+
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+
+# 本地运行数据与密钥，绝不能进镜像
+apps/server/.miubot
+.miubot
+.env
+.env.*
+
+# 本地参考素材（体积大，且不参与构建）
+example
+ui-ux-design
+docs/reference
+.artifacts
+.workbuddy
+.scratch
+.tmp
+coverage
+plans
+todo.md
+
+*.log
+.DS_Store
+.vscode
+.zed
+.idea

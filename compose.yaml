@@ -1,0 +1,97 @@
+# Miubot 一键部署。
+#
+#   cp .env.example .env      # 填 MIUBOT_DOMAIN（自己已有反代时也可以留空）
+#   docker compose up -d --build
+#   docker compose logs miubot | grep 管理员口令
+#
+# 要自动 HTTPS（Caddy 申请证书）再加 profile：
+#   docker compose --profile tls up -d --build
+#
+# 说明见 deploy/docker/README.md。
+
+name: miubot
+
+services:
+  miubot:
+    build:
+      context: .
+      args:
+        # 版本号进镜像（工作台显示 + 更新检查比对）；从 GHCR 拉镜像时由 CI 注入过。
+        MIUBOT_VERSION: ${MIUBOT_VERSION:-}
+    image: ${MIUBOT_IMAGE:-miubot:local}
+    restart: unless-stopped
+    # 让 docker 当 PID 1：MCP stdio 子进程退出后能被正常回收。
+    init: true
+    # 与 systemd 的 TimeoutStopSec 对齐：留时间给 SIGTERM 收尾（断 Gateway、落盘）。
+    stop_grace_period: 20s
+    environment:
+      # 容器内监听所有地址；对外暴露由 ports 的绑定地址决定。
+      MIUBOT_HOST: 0.0.0.0
+      MIUBOT_PORT: "8787"
+      MIUBOT_DATA_DIR: /var/lib/miubot
+      # Host 校验（防 DNS rebinding）：留空 = 只接受回环，也就是只能从容器/本机反代访问。
+      MIUBOT_ALLOWED_HOSTS: ${MIUBOT_DOMAIN:-}
+      MIUBOT_ALLOWED_ORIGINS: ${MIUBOT_ALLOWED_ORIGINS:-}
+      # 留空 = 配了 MIUBOT_ALLOWED_HOSTS 就自动开 Secure；纯 HTTP 内网部署显式设 0。
+      MIUBOT_COOKIE_SECURE: ${MIUBOT_COOKIE_SECURE:-}
+      # 留空 = 首次启动自动生成管理员口令并打印到日志。
+      MIUBOT_PASSWORD_HASH: ${MIUBOT_PASSWORD_HASH:-}
+      MIUBOT_ADMIN_PASSWORD: ${MIUBOT_ADMIN_PASSWORD:-}
+      # 更新检查：留空 = 开启（每 6 小时问一次 GitHub 公开 API，不带标识）；0 = 完全不出站。
+      MIUBOT_UPDATE_CHECK: ${MIUBOT_UPDATE_CHECK:-}
+      MIUBOT_UPDATE_REPO: ${MIUBOT_UPDATE_REPO:-}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      # 具名卷：权限由镜像里的 /var/lib/miubot 继承，不需要在宿主机 chown。
+      # 想直接在宿主机看数据，换成 ./data:/var/lib/miubot 并 `chown 10001:10001 ./data`。
+      - miubot-data:/var/lib/miubot
+    ports:
+      # 默认只绑回环：由同机反代（或下面的 caddy）转发，不直接对公网开口。
+      - "${MIUBOT_BIND:-127.0.0.1}:${MIUBOT_PUBLISH_PORT:-8787}:8787"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 可选：自动 HTTPS 反代。只在 `--profile tls` 时启动。
+  # 需要域名 A/AAAA 记录已指向本机，且 80/443 可被外部访问。
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["tls"]
+    restart: unless-stopped
+    depends_on:
+      miubot:
+        condition: service_healthy
+    environment:
+      # 留空时下面 command 里的检查会直接报错退出，而不是让 Caddy 去解析一个空的站点地址。
+      MIUBOT_DOMAIN: ${MIUBOT_DOMAIN:-}
+    # 用 shell 做一次前置检查：`--profile tls` 必须配域名。
+    # （不用 compose 的 `${VAR:?}`：它在解析整个文件时就会失败，会连带挡住不带 tls 的起法。）
+    command:
+      - sh
+      - -c
+      - |
+        if [ -z "$$MIUBOT_DOMAIN" ]; then
+          echo "MIUBOT_DOMAIN 未设置：请在 .env 里填写域名，或去掉 --profile tls 用自带反代。" >&2
+          exit 1
+        fi
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  miubot-data:
+  caddy-data:
+  caddy-config:

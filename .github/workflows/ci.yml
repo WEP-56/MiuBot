@@ -1,0 +1,49 @@
+name: CI
+
+# 也被 release.yml 通过 `workflow_call` 复用：发版前必须先过同一套门禁。
+on:
+  push:
+  pull_request:
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      # 与部署文档一致：不跑包的 lifecycle 脚本。
+      - name: 安装依赖
+        run: npm ci --ignore-scripts
+
+      # 模型目录是生成物（.gitignore 里），测试与运行都依赖它。
+      - name: 生成模型目录
+        run: npm run generate:model-data
+
+      - name: 类型检查
+        run: npm run check
+
+      - name: Lint / 格式
+        run: npm run lint
+
+      - name: 单元测试
+        run: npm test
+
+      # 工作台产物不在版本库里，但服务端要托管它；这里顺带验证构建可用。
+      - name: 构建工作台
+        run: npm run build --workspace=@miubot/web
+
+      - name: 工作台类型检查
+        run: npm run check --workspace=@miubot/web
