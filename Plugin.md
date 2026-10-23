@@ -548,12 +548,12 @@ Agent 主动发言是 Agent 行为策略，插件定时任务是通用调度机�
 
 **注意：** 管理 API 已按域拆到 `apps/server/src/http/routes/*.ts`，新增端点在那里建模块并注册到 `router.ts`，依赖从 `HttpContext` 取；不要在 `json()` 里写 CORS 头。
 
-**管理面安全前置条件（✅ 2026-10-22 已完成）：** 原状是通用 `OPTIONS` 响应设置 `Access-Control-Allow-Origin: *`、`/api/*` 无认证、服务只监听本机地址。现已实现 `apps/server/src/api-security.ts`：
+**管理面安全前置条件（✅ 2026-10-22 已完成，2026-10-23 随公网部署改造升级）：** 原状是通用 `OPTIONS` 响应设置 `Access-Control-Allow-Origin: *`、`/api/*` 无认证、服务只监听本机地址。现已实现 `apps/server/src/api-security.ts` + `apps/server/src/auth.ts`：
 
-- `Host` 只接受回环地址且端口必须匹配服务端口（挡 DNS rebinding）。
-- `Origin` 收敛到 `127.0.0.1` / `localhost` 的服务端口与 `5173`，`Origin: null`（本地 `file://`）拒绝；不再有任何 `*` CORS 响应。
-- 令牌文件 `apps/server/.miubot/api-token`，工作台通过 `POST /api/auth/session` 换 `HttpOnly; SameSite=Strict` Cookie；支持 `Authorization: Bearer` / `X-Miubot-Token` 供脚本使用。
-- 免认证仅 `GET /api/health` 与会话下发端点；`OPTIONS` 预检放行但仍过 Host / Origin。
+- `Host` 只接受回环地址（端口必须匹配）或 `MIUBOT_ALLOWED_HOSTS` 显式列出的域名（挡 DNS rebinding，不支持通配符）。
+- `Origin` 收敛到同源地址与 `5173`，`Origin: null`（本地 `file://`）拒绝；不再有任何 `*` CORS 响应。
+- 认证是**单管理员口令 + 服务端可撤销会话**（`POST /api/auth/login` → `HttpOnly; SameSite=Strict` Cookie，HTTPS 下加 `Secure`）；`api-token` 降级为脚本用请求头（`Authorization: Bearer` / `X-Miubot-Token`），不再换浏览器 Cookie。
+- 免认证仅 `GET /api/health` 与登录流程（`/api/auth/login|logout|me`）；`OPTIONS` 预检放行但仍过 Host / Origin。
 
 **因此插件管理 API 不需要自带认证**，但必须遵守：新增端点统一走 `handler` 入口，配置中的 secret 仍要在响应里遮蔽、不进日志。详见 `docs/10-技术架构/02-消息处理与安全.md`。
 

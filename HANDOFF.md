@@ -1,7 +1,7 @@
 # 交接文档：Plugin 模块（阶段 A / B / C 主体已完成）
 
 > 用途：因会话上下文过长，在新会话继续开发时先读这份。
-> 最后更新：2026-10-23 12:05
+> 最后更新：2026-10-23 14:10
 
 **第一次读这份时按这个顺序：**
 
@@ -23,6 +23,33 @@
 **插件闭环现在是完整的**：事件订阅 / 发消息 / 存储 / Agent Tool / 对话钩子五条能力都有权限、代次、`bots` 作用域三道校验，启停即生效（重建会话），失败都写进插件状态或运行日志；配置面（Schema Config）与分发面（目录安装 / ZIP 上传 / 卸载）也已接通。剩下的活是独立 WebUI 入口、后台任务/调度与几只遗留 P2。
 
 验证门禁全绿：`npm run check` / `npm run lint` / `npm test`（**192 files / 1869 tests**）；`apps/web` 的 `tsc --noEmit` 也已干净（顺手删掉 `Sessions.tsx` 里一个未使用的类型别名）。
+
+**公网部署改造（2026-10-23，未提交）**：P0 四项 + 相关 P1 已落地，管理面可以暴露公网。要点：
+
+| 改动 | 落点 |
+|---|---|
+| `MIUBOT_HOST` / `MIUBOT_ALLOWED_HOSTS`（无通配符） | `index.ts`、`api-security.ts` |
+| 口令登录 + 服务端可撤销会话 + 失败锁定 + `Secure` Cookie；删除 `POST /api/auth/session` | `auth.ts`（新）、`http/routes/auth.ts`（新）、`http/server.ts` |
+| 服务端托管 `apps/web/dist/index.html` + SPA 回退 | `http/static.ts`（新）、`http/server.ts` |
+| `MIUBOT_DATA_DIR` / `MIUBOT_WEB_DIST` | `index.ts` |
+| JSON body 1 MB → 413、坏 JSON → 400 | `http/response.ts`（`HttpError`） |
+| 安全响应头（CSP/HSTS/nosniff/frame-ancestors）、按来源限速 | `http/server.ts`、`http/rate-limit.ts`（新） |
+| 数据目录 0700 / 文件 0600 / 原子写 | `storage.ts`（新）、`app-state.ts`、`auth.ts` |
+| 500 只回 traceId，详情进运行日志 | `http/server.ts` |
+| SIGTERM 优雅退出（断 Gateway → 关端口 → 落盘） | `index.ts` |
+| systemd / nginx / env / 备份脚本 / 手册 | `deploy/`（新） |
+| 登录页、登出、会话过期回登录页、改口令 | `apps/web/src/AuthGate.tsx`（新）、`utils/api.ts`、`Sidebar.tsx`、`pages/Advanced.tsx` |
+| Docker 一键部署：两段构建、非 root（uid 10001）、具名数据卷、健康检查、可选 Caddy 自动 HTTPS | `Dockerfile`、`compose.yaml`、`.env.example`、`.dockerignore`、`deploy/docker/`（新） |
+| 运行日志：10 MB × 5 轮转 + 写入前脱敏（密钥/令牌/长 base64）+ 单条截断 2000 字符 + 跨文件恢复 | `logging.ts`、`index.ts`（生成口令改为只写进程输出） |
+| 版本号：`MIUBOT_VERSION` → 根 `VERSION` 文件 → `package.json`，`0.0.0-dev` 兜底 | `version.ts`（新） |
+| 内置更新检查：GitHub Releases，6h 缓存、5s 超时、并发合并、`MIUBOT_UPDATE_CHECK=0` 可关；只提示不自动升级 | `update-check.ts`（新）、`routes/system.ts`、设置页 |
+| CI / Release：tag → 门禁 → GHCR 镜像（amd64）+ 源码包（含预构建工作台）+ GitHub Release | `.github/workflows/ci.yml`、`release.yml`（新） |
+
+单测新增 `apps/server/test/auth.test.ts`（18 项）、`response.test.ts`（9 项）、`storage.test.ts`（6 项）、`logging.test.ts`（11 项）、`version.test.ts`（10 项）、`update-check.test.ts`（10 项）、`http-server.test.ts`（14 项，真实 HTTP server + 真实 auth），重写 `api-security.test.ts`。全量 199 files / 1952 tests 通过；验收矩阵见 `deploy.md §7`（真实起进程跑过：Host 伪造 403、无凭据 401、旧后门 401、登录/登出、413/400、锁定 429、首启动口令只打印一次、会话文件只存 SHA-256；`/api/health` 带 `version`、`/api/system/update` 在 GitHub 403 时返回结构化错误而不是抛错）。已按 §九 做反向验证：去掉会话校验 → `api-security` + `http-server` 的伪造 Cookie 用例转红；去掉 body 流式上限 → `response` 两条用例转红。
+
+**仍未做**：入站对象白名单、公网工具策略、审计日志；发布镜像只有 amd64（ARM 机器本地 `--build`）。见 `deploy.md §10`。
+
+**Docker 相关文件未在开发机验证**（本机没有 Docker）：`Dockerfile` / `compose.yaml` / `.dockerignore` 只做过 YAML 解析与逻辑审查。首次在真机 `docker compose build` 时要重点看三处——`npm ci` 是否只靠 package.json 完成、`npm prune --omit=dev` 是否把运行期依赖剪掉、容器内 `--conditions=source` 能否解析 workspace 源码（本地 Windows 上已验证同样的解析路径）。
 
 最近八次提交：
 
@@ -60,6 +87,10 @@
 验证方式：用 28 个请求的 curl 矩阵对重构前后逐条比对（状态码 + 响应体；日志/决策/健康这类随时间变化的只比结构），除 QQ 头像 CDN 参数由平台轮换外完全一致；新增 `apps/server/test/qq-inbound.test.ts`（4 项，覆盖 @ 回复、重复投递、非 @ 走插话、`/new`），并做过「断掉 prompt 让测试失败」的反向验证。
 
 ### 管理面安全（前一轮完成）
+
+> ⚠️ 本节记录的是 2026-10-22 的**共享令牌**方案，已被 2026-10-23 的公网部署改造取代：
+> `POST /api/auth/session` 与 `miubot_token` Cookie 均已删除，改为口令登录 + 服务端可撤销会话
+> （`src/auth.ts`、`src/http/routes/auth.ts`）。现状看 §一 顶部的「公网部署改造」。
 
 `apps/server/src/api-security.ts`，三层校验：`Host` 回环 + 端口匹配（挡 DNS rebinding）、`Origin` 白名单（挡跨域读取，`ACAO: *` 已删除）、令牌（`Authorization` / `X-Miubot-Token` / `miubot_token` HttpOnly Cookie）。
 
@@ -169,6 +200,7 @@
 
 | 优先级 | 事项 | 落点 / 前置 | 备注 |
 |---|---|---|---|
+| P1 | 运行日志轮转 + 脱敏 | `logging.ts` | 公网长期跑会撑爆磁盘：按 10 MB × 5 切割；同时确认 `apiKey` / `appSecret` / 消息正文不进日志 |
 | P1 | `hasActiveHandler()` 支持按按钮归属判断 | `host.ts` + `platform/qq-adapter.ts` 的 `canHandleInteraction` | 现在只回答「有没有人在听」，回答不了「这个 `buttonId` 是不是你的」。**没有使用按钮交互的插件之前，没有真实需求驱动**，别为了它猜接口 |
 | P2 | 启停不再无条件重建会话 | `routes/plugins.ts` + `agentHost.anyAgentLoopRunning()` | 流式回复会被打断。可改为「有 loop 在跑就延后到空闲」 |
 | P2 | `inboundReferences.take()` 改引用计数 | `platform/plugin-bridge.ts` | 同一入站消息多插件回复时只有第一个拿到被动回复锚点。**会改变被动回复配额语义，先定语义再改** |

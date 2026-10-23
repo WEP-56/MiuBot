@@ -12,10 +12,30 @@
 
 ### 本地使用
 
+```bash
+npm install --ignore-scripts
+npm run generate:model-data
+npm run dev --workspace=@miubot/server   # http://127.0.0.1:8787（同时托管工作台产物）
+npm run dev --workspace=@miubot/web      # http://127.0.0.1:5173（热更新，/api 代理到服务端）
+```
+
+首次启动会打印一次管理员口令，散列存在 `<数据目录>/admin-password`；之后用该口令登录工作台。
+数据目录默认 `apps/server/.miubot/`。
+
 ### 部署到服务器
 
-当前管理 API 只接受本机回环访问，直接暴露公网会绕过认证。现状评估、硬阻断与实施顺序见 [deploy.md](deploy.md)；
-过渡方案（SSH 隧道，零改动）见其中 §6.4。
+**Docker（推荐，一条命令）**：
+
+```bash
+cp .env.example .env          # 填 MIUBOT_DOMAIN
+docker compose --profile tls up -d --build
+docker compose logs miubot | grep 管理员口令
+```
+
+详见 [deploy/docker/README.md](deploy/docker/README.md)。
+
+**裸机（systemd + nginx）**：见 [deploy/README.md](deploy/README.md)，包含 HTTPS、独立数据目录、
+备份与升级。设计背景与已落地/未落地项见 [deploy.md](deploy.md)。
 
 ## 常见问题与解决方案
 

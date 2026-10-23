@@ -26,7 +26,7 @@ packages/
 - 服务端说明与启动：`apps/server/README.md`；`apps/server/src/index.ts` 是进程入口与组合根，只做装配与启动，不再承载路由或业务流程分支。
 - 服务端模块边界（`apps/server/src/`）：
   - `http/` 管理 API：`server.ts`（CORS + `api-security` 校验 + 404/500 边界）、`router.ts`（路由表，顺序即优先级）、`routes/*.ts`（按域拆分）、`context.ts`（路由依赖的运行时状态访问器）、`response.ts` / `present.ts`。
-  - `app-state.ts` 配置/会话/对象配置的内存状态与持久化；`logging.ts` 运行日志；`api-security.ts` 本机认证（Host / Origin / 令牌）。
+  - `app-state.ts` 配置/会话/对象配置的内存状态与持久化；`logging.ts` 运行日志（轮转 + 脱敏）；`api-security.ts` 请求边界（Host / Origin / 凭据）；`auth.ts` 管理员口令与可撤销会话；`storage.ts` 原子写与文件权限；`version.ts` 版本号；`update-check.ts` 内置更新检查（只提示，不自动升级）。
   - `qq/connection.ts` 连接、扫码、连接状态；`qq/inbound.ts` 入站消息主流程；`proactive.ts` 群聊插话；`sticker-tagging.ts` 表情包自动打标。
   - `agent-host.ts` 装配 AgentSession、扩展与工具授权；`runtime.ts` 配置类型、默认值与通用模型请求；`platform/` 平台契约与 QQ 适配。
 - Web 工作台说明与启动：`apps/web/README.md`；React 入口是 `apps/web/src/App.tsx`
@@ -34,7 +34,9 @@ packages/
 - 当前产品进度：`docs/00-产品与全局/03-路线图.md`
 - 消息流水线与安全约束：`docs/10-技术架构/02-消息处理与安全.md`
 
-当前运行形态是单机 Node 服务：`apps/server` 提供 `127.0.0.1:8787` 的本机 API，并装配 QQ 官方 Bot；`apps/web` 默认运行在 `127.0.0.1:5173`，将 `/api` 代理到服务端。服务端当前把配置、会话和运行日志保存到 `apps/server/.miubot/`，该目录是本机运行数据，不是源码或测试夹具。
+当前运行形态是单机 Node 服务：`apps/server` 提供 `127.0.0.1:8787` 的管理 API 与工作台静态产物，并装配 QQ 官方 Bot；`apps/web` 开发时运行在 `127.0.0.1:5173`，将 `/api` 代理到服务端。服务端把配置、会话和运行日志保存到 `apps/server/.miubot/`（`MIUBOT_DATA_DIR` 可改），该目录是本机运行数据，不是源码或测试夹具。
+
+生产部署（systemd + nginx + 口令登录 + 独立数据目录）见 `deploy/README.md`，环境变量与安全边界见 `apps/server/README.md` 与 `deploy.md`。管理面认证是**单管理员口令 + 服务端可撤销会话**（`src/auth.ts`）；新增 `/api/*` 路由自动受保护，不需要各自处理认证。
 
 基础闭环已经接通：QQ 官方 Bot（扫码或 AppID/AppSecret）、提供商/模型、人格、群/个人会话、Agent Loop、工具开关、调试台、运行日志和群聊智能插话。插件闭环（事件插件宿主 + 管理 API + 工作台插件页 + 插件注册 Agent Tool + 插件注册对话钩子）也已接通，见 `packages/plugin/src/host/`。MCP 管理、长期记忆、表情包、定时任务、插件上传安装、完整 Trace、正式数据库持久化等能力以路线图为准，看到 Web 占位页时不要默认其后端已经实现。
 
