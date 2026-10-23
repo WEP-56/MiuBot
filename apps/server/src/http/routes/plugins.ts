@@ -45,6 +45,13 @@ async function respondInstalled(ctx: HttpContext, res: ServerResponse, id: strin
 		// 新插件的工具要进已有会话，否则要等会话自然过期才生效。
 		ctx.agentHost.rebuildAgentSessions();
 	}
+	// 安装插件等于往服务器上落代码，审计里要留下具体是哪个插件。
+	// 请求级的 `POST /api/plugins/import → 200` 只知道有人调了接口，不知道装了什么。
+	ctx.audit.record({
+		action: "plugin.install",
+		actor: "admin",
+		detail: `已安装插件 ${id}（${allowed ? "已启用" : "未启用"}）`,
+	});
 	json(res, 200, { ok: true, installed: id, started: allowed, ...snapshot(ctx) });
 }
 
@@ -211,6 +218,11 @@ export async function handlePluginRoutes(
 			await ctx.config.save();
 		}
 		ctx.agentHost.rebuildAgentSessions();
+		ctx.audit.record({
+			action: "plugin.uninstall",
+			actor: "admin",
+			detail: `已卸载插件 ${id}${removed.dataDeleted ? "（含数据）" : ""}`,
+		});
 		json(res, 200, { ok: true, removed: removed.directory, ...snapshot(ctx) });
 		return true;
 	}

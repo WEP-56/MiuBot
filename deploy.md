@@ -76,7 +76,7 @@
 | 错误响应 | `HttpError` 按状态码回；其余 500 只回 `traceId`，详情进运行日志 | ✅ P1-6 |
 | 守护 | `deploy/miubot.service` + SIGTERM 优雅退出（断 Gateway → 关端口 → 落盘） | ✅ P1-7 |
 | 备份 | `deploy/backup.sh`（tar + 权限收紧 + 14 天轮转） | ✅ P1-8 |
-| 审计日志 | `audit.log`（JSON Lines，10 MB × 3）：登录/失败/锁定/登出/改密 + 所有变更类管理请求，统一在 `http/server.ts` 埋点 | ✅ P2-4 |
+| 审计日志 | `audit.log`（JSON Lines，10 MB × 3）：登录/失败/锁定/登出/改密 + 所有变更类管理请求（统一在 `http/server.ts` 埋点）；插件与技能的安装/卸载额外记具体名字 | ✅ P2-4 |
 | 入站白名单 | `config.access.allowedPeers`（`group:<ID>` / `c2c:<ID>`）；未命中的消息在副作用之前丢弃、不回复；`MIUBOT_ALLOWED_PEERS` 可覆盖 | ✅ P2-1 |
 | 工具策略 | 文件与命令类工具启用时启动 WARN + Tools 页红字；`MIUBOT_DISABLE_NATIVE_TOOLS=1` 在会话层整体禁用 | ✅ P2-2 |
 
@@ -271,8 +271,11 @@ if (url.pathname === "/api/auth/session" && req.method === "POST") {
 
 按风险从高到低：
 
-1. **插件/技能导入在公网模式下默认关闭**（`MIUBOT_ALLOW_REMOTE_INSTALL=0`）。这是剩下最重的一条：
-   导入插件等于在服务器上跑任意 Node 代码，危险级别和 `bash` 工具相同，但目前只要有管理员会话就能做。
+1. ~~插件/技能导入在公网模式下默认关闭~~ **决定不做**（2026-10-23）：导入是管理员主动行为，只走已认证的管理面，
+   而管理面本身已经守住了 Host / Origin / 跨站 / 凭据四层。加开关挡不住「管理员自己装了个坏插件」，
+   也挡不住导入器本身的漏洞（那时被利用的就是导入路径）。真正能降低风险的是**事后可查**——
+   所以 `plugin.install` / `plugin.uninstall` / `skill.install` / `skill.import` / `skill.remove`
+   现在会连插件名、技能名、来源 URL 一起进审计日志，比请求级的 `POST /api/plugins/import → 200` 具体得多。
 2. **审计日志补上「改了什么」**：现在记的是 `PUT /api/config → 200`，够定位是谁动的，但看不出改了哪几项。
    下一步可以在变更前后做一次字段级 diff（脱敏后入库）。
 3. **会话级限流**：现在限速按来源 IP，公网多用户场景下应该按「群 / 用户」再限一层，防止单个群刷爆额度。

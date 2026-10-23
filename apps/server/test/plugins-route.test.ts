@@ -69,6 +69,8 @@ async function harness(): Promise<{
 		},
 		// 启停会重建会话以同步工具集；这里只验证「有没有被调用」，不需要真会话。
 		agentHost: { rebuildAgentSessions },
+		// 安装/卸载会写审计：断言用不到内容，但要有个能接住的实现。
+		audit: { record: () => undefined, list: async () => [], flush: async () => undefined },
 		plugins: {
 			list: host.list,
 			get: host.get,

@@ -28,6 +28,11 @@ export async function handleSkillRoutes(
 		try {
 			const skill = await installSkillFromGitHub(ctx.agentDir, input.sourceUrl);
 			if (ctx.config.get().tools.skillsEnabled) ctx.agentHost.rebuildAgentSessions();
+			ctx.audit.record({
+				action: "skill.install",
+				actor: "admin",
+				detail: `已安装技能 ${skill.name}（来自 ${input.sourceUrl}）`,
+			});
 			json(res, 201, { ok: true, skill, skills: listInstalledSkills(ctx.agentDir) });
 		} catch (error) {
 			json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
@@ -43,6 +48,7 @@ export async function handleSkillRoutes(
 			const archive = await binaryBody(req, 20_000_000);
 			const skill = await installSkillFromZip(ctx.agentDir, archive);
 			if (ctx.config.get().tools.skillsEnabled) ctx.agentHost.rebuildAgentSessions();
+			ctx.audit.record({ action: "skill.import", actor: "admin", detail: `已导入技能 ${skill.name}（ZIP）` });
 			json(res, 201, { ok: true, skill, skills: listInstalledSkills(ctx.agentDir) });
 		} catch (error) {
 			json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
@@ -51,9 +57,11 @@ export async function handleSkillRoutes(
 	}
 	const skillMatch = url.pathname.match(/^\/api\/skills\/([^/]+)$/);
 	if (skillMatch && req.method === "DELETE") {
+		const name = decodeURIComponent(skillMatch[1]!);
 		try {
-			await removeInstalledSkill(ctx.agentDir, decodeURIComponent(skillMatch[1]!));
+			await removeInstalledSkill(ctx.agentDir, name);
 			if (ctx.config.get().tools.skillsEnabled) ctx.agentHost.rebuildAgentSessions();
+			ctx.audit.record({ action: "skill.remove", actor: "admin", detail: `已删除技能 ${name}` });
 			json(res, 200, { ok: true, skills: listInstalledSkills(ctx.agentDir) });
 		} catch (error) {
 			json(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
