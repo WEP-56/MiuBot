@@ -15,7 +15,7 @@
 
 | commit | 内容 |
 |---|---|
-| 本次 | feat: 插件 Pi Extension factories 桥接会话资源加载器（阶段 B 收尾） |
+| `788b25d` | feat: 插件 Pi Extension factories 桥接会话资源加载器（阶段 B 收尾） |
 | `972f8e9` | feat: 插件注册 Agent Tool 与会话注入（阶段 B） |
 | `d41ce5d` | feat: 插件管理 API 与工作台插件页（阶段 C） |
 | `86dc6af` | refactor(server): 拆分运行时状态、QQ 流水线与前置逻辑 |
