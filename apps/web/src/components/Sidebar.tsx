@@ -17,6 +17,7 @@ export type PageId =
   | "memory"
   | "scheduler"
   | "tools"
+  | "commands"
   | "extensions"
   | "logs"
   | "settings";
@@ -43,6 +44,7 @@ const mainItems: Item[] = [
 
 const advancedSubItems: { id: PageId; label: string }[] = [
   { id: "tools", label: "Tools" },
+  { id: "commands", label: "斜杠命令" },
   { id: "stickers", label: "表情包" },
   { id: "proactive", label: "主动行为" },
   { id: "mcp", label: "MCP" },
@@ -81,9 +83,9 @@ export function Sidebar({ current, onChange }: SidebarProps) {
   const isAdvActive = advancedSubItems.some((sub) => sub.id === current);
 
   return (
-    <aside className="w-[210px] shrink-0 h-full flex flex-col justify-between py-5 px-3 bg-black select-none">
-      {/* Top Header */}
-      <div>
+    <aside className="w-[210px] shrink-0 h-full flex flex-col py-5 px-3 bg-black select-none">
+      {/* 上半区：可滚动。导航项会随功能增加而变长，小屏下必须能滚，否则会把下半区顶出屏幕。 */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="flex items-center justify-between px-2 mb-6">
           <div className="flex items-center gap-2.5">
             <Icon.BotFace size={20} className="text-white" />
@@ -157,8 +159,8 @@ export function Sidebar({ current, onChange }: SidebarProps) {
         </nav>
       </div>
 
-      {/* Bottom fixed items */}
-      <div className="space-y-1 pt-4 border-t border-transparent">
+      {/* 下半区：固定。主题、日志、设置、退出必须随时可点，不跟着导航一起滚走。 */}
+      <div className="shrink-0 space-y-1 border-t pt-4" style={{ borderColor: "var(--hairline)" }}>
         <ThemeToggle />
         <button
           onClick={() => onChange("logs")}

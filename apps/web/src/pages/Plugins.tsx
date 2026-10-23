@@ -1,3 +1,5 @@
+import { Toggle } from "../components/Controls";
+import { PageShell } from "../components/PageShell";
 import { useEffect, useState } from "react";
 import { Icon } from "../components/Icon";
 
@@ -18,6 +20,8 @@ type Plugin = {
   tools: string[];
   /** 该插件贡献的对话钩子名（插件内短名，会话里挂成 `plugin:{id}/{name}`）；停用后为空。 */
   extensions: string[];
+  /** 该插件注册的斜杠命令名（不含前导斜杠）；停用后为空。 */
+  commands: string[];
   /** manifest 是否声明了 `config`；只有声明过的插件才有配置表单。 */
   hasConfig?: boolean;
   /** 插件目录绝对路径；卸载提示要用。 */
@@ -488,8 +492,7 @@ export function Plugins() {
   };
 
   return (
-    <div className="flex-1 h-full overflow-y-auto bg-black text-white p-7 select-none">
-      <div className="max-w-[760px] space-y-4">
+    <PageShell>
         <div className="flex items-start justify-between gap-4 pb-1">
           <div>
             <h1 className="text-[20px] font-bold text-white tracking-tight">插件</h1>
@@ -715,6 +718,17 @@ export function Plugins() {
                     {extension}
                   </span>
                 ))}
+                {plugin.commands?.length > 0 && (
+                  <span className="text-[11.5px] text-[#888888]">斜杠命令</span>
+                )}
+                {(plugin.commands ?? []).map((command) => (
+                  <span
+                    key={command}
+                    className="rounded-md border border-[rgba(168,85,247,0.25)] bg-[rgba(168,85,247,0.08)] px-1.5 py-0.5 font-mono text-[11px] text-[#c084fc]"
+                  >
+                    /{command}
+                  </span>
+                ))}
                 {plugin.permissions.length === 0 && (
                   <span className="text-[11.5px] text-[#666666]">未声明能力</span>
                 )}
@@ -746,18 +760,14 @@ export function Plugins() {
                 <div className="space-y-2.5 rounded-lg border border-[rgba(239,68,68,0.25)] bg-[rgba(239,68,68,0.06)] p-3">
                   <p className="text-[12.5px] text-[#f87171]">将删除插件目录，之后可以重新安装。</p>
                   <p className="break-all font-mono text-[11px] text-[#888888]">{plugin.directory}</p>
-                  <label className="flex items-center gap-2 text-[12px] text-[#cccccc]">
-                    <input type="checkbox" checked={dropData} onChange={(event) => setDropData(event.target.checked)} />
-                    同时删除该插件的数据（{`plugin-data/${plugin.id}.json`}）
-                  </label>
-                  <label className="flex items-center gap-2 text-[12px] text-[#cccccc]">
-                    <input
-                      type="checkbox"
-                      checked={dropConfig}
-                      onChange={(event) => setDropConfig(event.target.checked)}
-                    />
-                    同时删除该插件的配置（{`plugin-config/${plugin.id}.json`}）
-                  </label>
+                  <div className="flex items-center gap-2 text-[12px] text-[#cccccc]">
+                    <Toggle checked={dropData} onChange={setDropData} label="同时删除该插件的数据" />
+                    <span>同时删除该插件的数据（{`plugin-data/${plugin.id}.json`}）</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-[12px] text-[#cccccc]">
+                    <Toggle checked={dropConfig} onChange={setDropConfig} label="同时删除该插件的配置" />
+                    <span>同时删除该插件的配置（{`plugin-config/${plugin.id}.json`}）</span>
+                  </div>
                   <div className="flex justify-end gap-2">
                     <button className="btn-pill-dark" disabled={pending} onClick={() => setUninstalling("")}>
                       取消
@@ -794,7 +804,6 @@ export function Plugins() {
             </p>
           )}
         </section>
-      </div>
-    </div>
+    </PageShell>
   );
 }

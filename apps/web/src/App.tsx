@@ -8,6 +8,7 @@ import { Sessions } from "./pages/Sessions";
 import { Debug } from "./pages/Debug";
 import { Stickers } from "./pages/Stickers";
 import { Plugins } from "./pages/Plugins";
+import { Commands } from "./pages/Commands";
 import {
   Proactive,
   MCP,
@@ -50,6 +51,8 @@ export default function App() {
         return <Scheduler />;
       case "tools":
         return <Tools />;
+      case "commands":
+        return <Commands />;
       case "extensions":
         return <Plugins />;
       case "logs":
