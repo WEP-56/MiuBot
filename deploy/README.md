@@ -37,9 +37,7 @@ sudo install -d -m 700 /etc/miubot
 sudo git clone <repo> /opt/miubot
 cd /opt/miubot
 sudo npm ci --ignore-scripts
-# 模型目录是生成物（.gitignore 里），必须生成
-sudo npm run generate:model-data
-# 工作台产物：服务端直接托管 apps/web/dist/index.html
+# 工作台产物：服务端直接托管 apps/web/dist/index.html（模型目录已随仓库提交）
 sudo npm run build --workspace=@miubot/web
 sudo chown -R miubot:miubot /opt/miubot
 ```
@@ -162,7 +160,7 @@ crontab -e   # 17 4 * * * MIUBOT_DATA_DIR=/var/lib/miubot /opt/miubot/deploy/bac
 sudo systemctl stop miubot
 MIUBOT_DATA_DIR=/var/lib/miubot ./deploy/backup.sh
 cd /opt/miubot && sudo git pull --ff-only && sudo npm ci --ignore-scripts
-sudo npm run generate:model-data && sudo npm run build --workspace=@miubot/web
+sudo npm run build --workspace=@miubot/web
 sudo systemctl start miubot
 
 # 升级（B：换发布包，不用 build）

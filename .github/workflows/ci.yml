@@ -28,9 +28,11 @@ jobs:
       - name: 安装依赖
         run: npm ci --ignore-scripts
 
-      # 模型目录是生成物（.gitignore 里），测试与运行都依赖它。
-      - name: 生成模型目录
-        run: npm run generate:model-data
+      # 模型目录是提交进仓库的固定快照。这里只校验它与 provider 源码一致，**不联网重新生成**：
+      # 生成脚本会拉 models.dev 等上游的当日目录，那样每次 CI 的结果都不一样，测试与类型
+      # 会随上游模型增删而红绿（详见 .gitignore 里的说明）。
+      - name: 校验模型目录
+        run: npm run check:model-data --workspace=@miubot/provider
 
       - name: 类型检查
         run: npm run check

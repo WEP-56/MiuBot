@@ -8,8 +8,9 @@ apps/server/.miubot/
 *.tsbuildinfo
 *.cpuprofile
 
-# Generated model catalogs (regenerate with `npm run generate:model-data`)
-packages/provider/src/providers/data/
+# 模型目录（packages/provider/src/providers/data/）是**提交进仓库**的固定快照：
+# 生成脚本会联网拉 models.dev / OpenRouter / AI Gateway 的当日目录，不提交就无法复现构建，
+# 测试与类型也会随上游漂移。刷新用 `npm run generate:model-data`，并同步更新引用模型 id 的测试。
 packages/provider/src/providers/.model-generation-*/
 
 # Release metadata written by CI when packaging (never committed)

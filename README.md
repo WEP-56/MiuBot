@@ -14,7 +14,6 @@
 
 ```bash
 npm install --ignore-scripts
-npm run generate:model-data
 npm run dev --workspace=@miubot/server   # http://127.0.0.1:8787（同时托管工作台产物）
 npm run dev --workspace=@miubot/web      # http://127.0.0.1:5173（热更新，/api 代理到服务端）
 ```
@@ -44,10 +43,13 @@ docker compose logs miubot | grep 管理员口令
 
 ```bash
 npm install --ignore-scripts
-npm run generate:model-data   # 生成 provider 模型目录（首次或更新模型数据后）
 npm run check                 # 类型检查
 npm test                      # 单元测试
 ```
+
+模型目录（`packages/provider/src/providers/data/`）是提交进仓库的固定快照，装完依赖即可跑，不需要生成。
+要刷新到上游最新目录时运行 `npm run generate:model-data`（会联网拉 models.dev 等），
+生成后记得同步更新引用具体模型 id 的 provider 测试。
 
 
 ## License

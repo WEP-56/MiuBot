@@ -28,10 +28,9 @@ RUN npm ci --ignore-scripts
 
 COPY . .
 
-# 模型目录是生成物（.gitignore 里），必须生成；工作台产物由服务端直接托管。
+# 工作台产物由服务端直接托管（模型目录已随仓库提交，不需要联网生成）。
 # `npm prune` 去掉 tsc / vitest / biome 这类只在构建期需要的东西。
-RUN npm run generate:model-data \
- && npm run build --workspace=@miubot/web \
+RUN npm run build --workspace=@miubot/web \
  && npm prune --omit=dev --ignore-scripts
 
 # ── 运行阶段 ────────────────────────────────────────────────────────────

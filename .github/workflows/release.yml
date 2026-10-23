@@ -78,7 +78,6 @@ jobs:
           cache: npm
 
       - run: npm ci --ignore-scripts
-      - run: npm run generate:model-data
       - run: npm run build --workspace=@miubot/web
 
       - name: 计算镜像名
