@@ -5,6 +5,9 @@ name: CI
 # 同时触发会互相取消，留下一排误导性的「cancelled」。
 on:
   push:
+    # 只写 `tags-ignore` 会让分支推送完全不触发（GitHub 的过滤器语义：未声明的 ref 类型不匹配），
+    # 所以这里必须把 branches 也显式写出来。
+    branches: ["**"]
     tags-ignore: ["v*"]
   pull_request:
   workflow_call:
