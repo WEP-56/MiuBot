@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { isNewerVersion, normalize, resolveVersion } from "../src/version.ts";
 
@@ -20,8 +21,12 @@ describe("resolveVersion", () => {
 	});
 
 	it("falls back to the repository version when nothing is injected", () => {
-		// 仓库里的 package.json 是占位版本 0.0.0 → 标成开发版。
-		expect(resolveVersion()).toBe("0.0.0-dev");
+		// 仓库的 package.json 带真实版本号（v0.3.0 起）；这里断言的是「以它为兜底」，
+		// 而不是某个写死的值——否则每次发版都要改测试。
+		const manifest = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8")) as {
+			version?: string;
+		};
+		expect(resolveVersion()).toBe(normalize(manifest.version ?? "0.0.0"));
 	});
 });
 
