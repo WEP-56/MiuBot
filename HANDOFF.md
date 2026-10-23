@@ -1,115 +1,90 @@
 # 交接文档：Plugin 模块（阶段 A / B / C 主体已完成）
 
 > 用途：因会话上下文过长，在新会话继续开发时先读这份。
-> 最后更新：2026-10-23 18:00
+> 最后更新：2026-10-23 18:40
 
 **第一次读这份时按这个顺序：**
 
-1. **§零 下一轮计划** —— 2026-10-23 提出的五条线，决策已拍板、全部未开工；从这里挑一件
+1. **§零 下一轮计划** —— 2026-10-23 提出的五条线（第 4 条已完成），剩四条决策已拍板；从这里挑一件
 2. §一 当前状态 —— 已推到哪、门禁是否绿
 3. §三 关键设计决策 —— 动手前必须知道哪些是刻意如此的
 4. 相关工作区 §二 代码位置 + §六 已知遗留
 
 ---
 
-## 零、下一轮计划（2026-10-23 提出，全部未开工）
+## 零、下一轮计划（2026-10-23 提出）
 
-五条线互不依赖，**决策已全部拍板**（见本节末尾「已定」），可以直接开工。
-建议顺序 **4 → 2 → 5 → 1 → 3**：4 和 2 改的是服务端数据模型与入站流程，
-5 与 2 同属"工具级配置"、可以顺手一起做，1 是纯前端收口，3 依赖 2 落地后才有"每会话"的统计口径。
+> 第 4 条（斜杠命令 + 管理员）、第 2 条（群 / 私聊细粒度配置）、第 5 条（图像提供商下移）已于
+> 2026-10-23 完成，落地明细见 §五.8 / §五.9 / §五.10。
+
+剩余两条互不依赖，**决策已全部拍板**（见本节末尾「已定」），可以直接开工。
+建议顺序 **1 → 3**：1 是纯前端收口（布局居中 + 控件统一），3 是首页接真实数据。
+**1a（布局居中）已完成**（2026-10-23，见 §五.11），1b（控件统一）待做。
 
 ### 1. 前端布局与控件一致性
 
-**1a 主内容区水平居中（只有表情包页是对的）**
+**1a 主内容区水平居中 —— ✅ 已完成，见 §五.11**
 
-| 页面 | 容器 | 现状 |
+8 个页面原来各写一套外层容器（宽度 760/900/980/1100 混用，背景一半 `bg-black` 一半主题变量，
+居中只有表情包页做了）。现在统一由 `components/PageShell.tsx` 提供，页面只写内容。
+
+**1b 控件风格：原生 → 微拟物（进行中：Toggle / Slider 已完成，Select 未做）**
+
+已落地 `apps/web/src/components/Controls.tsx`（三个控件放一个文件，比拆三个文件少三份 import）：
+
+- `Toggle`：`<button role="switch" aria-checked>`，轨道走 `var(--border-strong)` / 绿，**13 处**原生
+  `<input type="checkbox">` 全部替换（Advanced 7、Sessions 3、Commands / Platforms / Plugins / Providers 各 1）。
+- `Slider`：仍是原生 `<input type="range">`（键盘步进、触摸、无障碍读数浏览器全给好了），
+  只换外观（`index.css` 的 `.sketch-slider` + 内联渐变画进度），**2 处**替换（表情包采集概率、插话概率）。
+- `Select`：组件已写好（combobox + listbox、↑↓/Home/End/Enter/Esc、`aria-activedescendant`、
+  点外部关闭），**但 12 个调用点还没换**——它们用的是 `<option>` 子元素，要改成 `options` 数组传参。
+
+**下一步（16 处，逐个把 `<option>` 子元素改成 `options` 数组）**：
+
+| 位置 | 选项来源 | 备注 |
 |---|---|---|
-| `Stickers.tsx:96` | `mx-auto max-w-[1100px]` | ✅ 参考实现：居中 + 有上限 |
-| `Dashboard.tsx:13` | `max-w-[760px]` | ❌ 偏左 |
-| `Plugins.tsx:492` | `max-w-[760px]` | ❌ 偏左 |
-| `Advanced.tsx`（8 处 section） | `max-w-[760px]` | ❌ 偏左 |
-| `Personas.tsx:20` | `max-w-[900px]` | ❌ 偏左 |
-| `Platforms.tsx:23` | `max-w-[900px]` | ❌ 偏左 |
-| `Providers.tsx:69` | `max-w-[980px]` | ❌ 偏左 |
-| `Debug.tsx` / `Sessions.tsx` | 全宽 flex / 双栏 | 保持原样（用户明确排除） |
+| `Advanced.tsx:23` | 字面量 2 项 | 插话模式 |
+| `Advanced.tsx:24` / `:25` | `providers` / `models` | 判断提供商 / 判断模型 |
+| `Advanced.tsx:71` | 字面量 2 项 | MCP 传输方式 |
+| `Advanced.tsx:603` / `:594` | `imageProviders` / 固定 4 家 | 图像提供商 / 搜索提供商 |
+| `Sessions.tsx:68` | `bots` | 新建对象时选 Bot |
+| `Sessions.tsx:71` ×5 | `configOptions.personas` / `providers` / `selectedProvider.models` / `fallbackProvider.models` | 人格 / 提供商 / 模型 / 备用提供商 / 备用模型 |
+| `Providers.tsx:59` / `:61` | 字面量 3 项 / `catalog` | API 协议 / 模型列表（`value=""` 的「选完即加」用法要保留） |
+| `Stickers.tsx:101` ×2 | `taggingProviders` / 其 models | 打标提供商 / 模型 |
+| `Debug.tsx:33` ×2 | `providers` / `selected.models` | 调试台 |
 
-缺的就是一个 `mx-auto`。但别只补 8 个 `mx-auto` 了事——各页的宽度（760/900/980/1100）和
-外层样式（有的 `bg-black text-white`，有的 `var(--bg-app)` + `var(--text-main)`）本来就
-不一致，这正是"整体偏左 + 视觉不齐"的根因。
-
-落点：`apps/web/src/components/PageShell.tsx`，props `{ width?: 760|900|980|1100, children }`，
-内部 `mx-auto max-w-[…]`；逐页替换手写容器，顺手统一外层背景/文字色变量。
-验收：1280 宽窗口下各页左右留白相等；缩到 900 宽内容跟着缩且仍居中；表情包页视觉不变。
-
-**1b 控件风格：原生 → 微拟物**
-
-现状盘点（都是浏览器原生外观）：
-
-- `<input type="checkbox">`：`Platforms.tsx`、`Plugins.tsx`、`Advanced.tsx`（Tools 页每个开关）、`Personas.tsx` 等
-- `<select className="sketch-input">`：Stickers 打标模型、Tools 搜索提供商、Providers 类型选择
-- `Providers.tsx:70` 还有个 hack：把原生 `<select>` 设成 `opacity-0` 盖在按钮上做下拉
-- `type="range"`：`Stickers.tsx` 自动采集概率（只有 `accent-color`）
-
-落点：`components/Toggle.tsx`（`role="switch"` + 凹槽 + 圆形滑块，开=绿）、`components/Select.tsx`
-（自绘下拉，键盘 ↑↓/Enter/Esc 可用，`aria-expanded`）、`components/Slider.tsx`；样式变量放 `index.css`。
+标签取值有两种：`item.name` 与 `item.name || item.id`（模型类要用后者）。空值选项（「不启用」「选择提供商」）
+用 `placeholder` 属性表达，不要再塞一个 `value=""` 的 option——`Select` 已经会在无匹配时显示 placeholder。
 
 坑：
 - 别为了好看把 `<select>` 换成 `div` 却丢掉键盘操作与 `label` 关联——自绘组件必须自己补齐
   `role`/`aria-*`/焦点环/Tab 顺序，否则是可用性倒退。
-- `opacity-0` 覆盖式下拉统一后应删除（它是为了"看起来像按钮、实际是 select"）。
+- 列表项用 `onMouseDown` 而不是 `onClick`：click 会先触发外层的「点外面关闭」。
 - 一次性换完再截图对比，别一半原生一半自绘。
 
-### 2. 群 / 私聊细粒度配置
+### 2. 群 / 私聊细粒度配置（✅ 已完成，见 §五.9）
 
-现状：`PeerConfig`（`agent-host.ts:37-47`）只有 `personaId` / `providerId` / `modelId` /
-`useTools`（布尔）/ `features.activeReply`。工具是全局 `config.tools.enabled`，对象级只有
-"全开或全关"。
+`PeerConfig` 现在有 `fallbackProviderId` / `fallbackModelId` 与 `toolsOverride`；备用模型的
+重试循环在 `apps/server/src/agent-prompt.ts`，工具覆盖的唯一执行点仍是 `agent-host.enabledToolNames()`。
+落地明细、坑与实测方式见 §五.9。
 
-**2a 备用模型**（语义已定，2026-10-23）
+**实现时发现的两件事（原计划没写到，后续别再踩）**：
 
-用户原话："备用模型在主模型失败三次后短暂换用，无论不可用还是其它问题，下次调用仍然用主模型。
-备用只是单次调用下的临时替换，不是代替主模型的位置。"
+- **provider 报错不会让 `prompt()` 抛错**：Agent Loop 把错误写进 assistant 消息的
+  `stopReason: "error"` 里然后正常结束。原来的 `inbound.ts` 只在 `prompt()` 抛错时回通用文案，
+  所以「429 / 超时 / 网络错」这类失败以前是**静默的**（空回复、日志里什么都没有）。现在两者都算失败。
+- **Pi 自带重试**（`settings.retry`，`auto_retry_start/end`）。我们的 3 次是它耗尽之后的**外层**重试，
+  所以实际请求数可能比「3 次」更多；日志按「第 n/m 次」逐条记录，别把它当成 Pi 的那套。
 
-翻译成实现约束：
+### 3. 首页概览接真实数据（✅ 主体完成，Token 累计未做）
 
-- `PeerConfig` 增 `fallbackProviderId` / `fallbackModelId`（空 = 不启用）。
-- **触发条件**：同一轮对话（一次 `prompt()`）里，主模型**连续失败 3 次**（成功即清零）。
-  **不区分错误类型**——缺 key、模型被删、429、超时、网络错，一律计入。
-- **作用范围**：第 3 次失败后，本轮改用备用模型把这一次对话跑完；本轮结束（`finally`）
-  把模型**恢复成主模型**。`session.modelId` 始终是主模型，备用不写进会话配置。
-- **不得静默**：切换时写 `WARN`（主模型、备用模型、连续失败次数），并在 `RuntimeSession`
-  上留一个 `lastFallbackAt` / `lastModelUsed` 之类的字段供工作台展示。
-- 备用也失败时，两次错误都进日志，对外仍是那句通用文案（`inbound.ts` 已改）。
-- 重试会重复计费：3 次失败 = 最多 3 次请求的成本，日志里要能看到，别让人以为"只失败了一次"。
+`GET /api/overview`（`apps/server/src/http/routes/overview.ts`）一次给齐：今日消息 / 今日会话 /
+活跃对象 / 在线 Bot（`connected` / 连接状态表总数）/ 今日主动消息 + 被拦截数 / 近 24h ERROR 数 /
+版本 + 运行时长。`Dashboard.tsx` 已接上，每 15 秒刷新，首帧显示 `—` 而不是 0。
 
-实现落点与坑：
-
-- 落点在 `inbound.ts` 的 `agentSession.prompt()` 外层（那里已经 try/catch 了），
-  不在 `agent-host.getAgentSession()`——那是建会话，管不到"调用失败"。
-- `AgentSession` 有 `setModel()`（`agent-session.ts:2509`，`agent-host.ts:178-179` 就是这么切模型的），
-  切换与恢复都用它；恢复必须放 `finally`，否则一次失败就把会话永久钉在备用模型上。
-- **流式输出（C2C）要先 `stream.cancel()` 再重试**，并把 `streamedText` 清空；
-  QQ 的 stream 接口能否在同一 `msgId` 上重开需要实测，做不到就退化成"重试成功后用普通文本发送"。
-- 重试不要在"已经往群里发了半句"之后进行——`prompt()` 的失败点可能在流式过程中，
-  所以取消 + 重发要当成一次完整的重新开始。
-
-**2b 分作用域工具**
-
-- `PeerConfig` 增 `toolsOverride?: string[] | null`（`null` = 继承全局）。
-- 唯一的执行点已经存在：`agent-host.enabledToolNames()` 里已经读了 `peer.useTools`，
-  在那里做 `toolsOverride ?? config.tools.enabled` 即可，**不要**在入站流程里另写一套过滤。
-- 注意这条链上不止内置工具名：`enabledToolNames()` 还拼了 `load_skill` / `search_stickers` /
-  `send_sticker` / MCP 工具 / 插件工具。过滤只应作用于"内置 + 可配置"那一段，别把插件工具一起过滤掉。
-- UI：会话/对象配置弹窗加"工具"多选（继承 / 自定义），跟现有"聊天模型、人格、主动行为"并列。
-
-验收：给某个群设自定义只留 `web_search` → 该群 `bash` 不可用、其它群不受影响；
-把该群主模型指向一个已删除的模型并连发一条消息 → 前 3 次失败、第 4 次走备用成功、
-日志有 `WARN`、**下一条消息仍从主模型开始**。
-
-### 3. 首页概览接真实数据
-
-现状：`Dashboard.tsx` 全是硬编码（`1,284` / `2.6M` / `2 / 2` / `99.2%`），页脚自己写着
-"布局概念示意 · 数据为虚构样例"。
+**仍未做**：Token 消耗卡显示「未统计」——`AgentSession.getSessionStats()` 是实时值，要按天累计必须
+在 `inbound.ts` 每轮 `prompt()` 后取一次增量写进 `usage.json`（参考 `proactive-usage.json` 的写法）。
+接口里 `tokens` 字段显式给 `null`（不是 0），前端据此显示「未统计」。
 
 **决定（2026-10-23）**：只上有真实数据源的指标；没有数据源的两张卡直接删，不为凑 2×2 造数。
 
@@ -151,71 +126,17 @@ Token 采集怎么做：
 坑：`Dashboard.tsx` 现在 `select-none` + 全静态，接数据后要有空态（"还没有消息"）和加载态，
 否则首帧会显示 0 然后跳变；数字统一走 `Intl.NumberFormat`（现在是手写的 `1,284`）。
 
-### 4. 斜杠命令 + 管理员
+### 4. 斜杠命令 + 管理员（✅ 已完成，见 §五.8）
 
-**现状 bug**：`inbound.ts:118` 的 `if (isGroup && !mentioned) { proactive.queueGroupMessage(...); return; }`
-排在命令判定（`:142` `/new`、`:155` `/compact`）之前——群里不 @ 的 `/new` 根本到不了命令分支，
-私聊能用、@ 了也能用。这就是"群聊下无法使用 /new"的原因。
+原来的 bug 已修：`inbound.ts` 的群聊闸门曾排在命令判定之前，群里不 @ 的 `/new` 根本到不了命令分支。
+现在命令解析在**去重与白名单之后、群聊闸门之前**，命中即接管。实现细节与验收方式见 §五.8。
 
-**现状**：命令是两条 `if (text === "/new")` 硬编码，没有注册表、没有权限、没有帮助。
+### 5. 图像生成提供商配置下移到 高级配置 → Tools → image_gen（✅ 已完成，见 §五.10）
 
-目标：
-
-- `apps/server/src/commands/`：注册表 `{ name, description, permission: "admin" | "all", run(ctx) }`，
-  内置 `new` / `compact` / `help`；解析放在**去重与白名单之后、群聊闸门之前**，命中即接管
-  （不走插话、不进 Agent）。
-- 管理员：`config.admins: string[]`（QQ 用户 openid）。**默认空 = 没有人能执行管理员命令**
-  （安全默认），启动日志与 UI 都要提示"尚未配置管理员"。
-- 新增「高级配置 → 斜杠命令」页：命令总览（名称/说明/权限/开关）+ 管理员名单 + 每个命令的启停。
-- 为插件留口：插件经 `ctx.commands.register()` 注册命令，与 `ctx.tools` / `ctx.extensions` 同一套
-  代次 + 权限守卫（`plugin:command:register`），命名冲突规则照抄工具注册表。
-
-坑：
-- 命令解析必须在 `normalizeMessageEvent` 剥离 @ 之后（现状已满足），否则群里 `@bot /new` 匹配不上。
-- 群聊里非 @ 的命令**只接管已注册的命令**；其余以 `/` 开头的普通聊天仍走插话，否则会误吞群友的消息。
-- 命令回复走被动回复锚点（`inboundReferences`），不要新开一条主动推送。
-
-验收：群里不 @ 发 `/new` → 新建会话；`/help` 列出可用命令；非管理员发 `/admin` 被拒且记审计；
-关掉某命令后它不再响应；插件注册的命令出现在同一张表里。
-
-### 5. 图像生成提供商配置下移到 高级配置 → Tools → image_gen
-
-**现状**：`image_gen` 的提供商配置挂在 `Providers.tsx` 里，和 LLM 提供商并列（同一页两个区块 +
-"添加提供商 → 图像生成"的分支），数据存在 `config.imageProviders[]`（`runtime.ts:98`），
-经 `PUT /api/config` 保存。而 `web_search` 的提供商配置在 Tools 页，数据是
-`config.tools.webSearch = { provider, apiKeys }`（`runtime.ts:54`）。
-
-同一个层级上放着两种语义：**LLM 提供商**是 Agent 的推理后端，**图像提供商**是
-`image_gen` 这个工具的依赖。放在一起会让人以为"换个提供商就能换掉模型的图像能力"。
-
-**还有一处语义缺口**（不只是 UI 位置）：`agent-host.ts:215` 选图像提供商的方式是
-`config().imageProviders.find((item) => item.enabled && item.apiKey)`——**第一个启用且有 key 的**，
-没有显式选择；`web_search` 则有 `tools.webSearch.provider` 明确指向。所以"下移"必须连同
-"显式选择"一起做，否则只是换了个页面摆。
-
-**方案（推荐）**：
-
-- 数据：`config.imageProviders[]` **保留**（用户可自定义 baseUrl/model，不像 web_search 是固定枚举），
-  新增 `config.tools.imageGen = { providerId: string }`（空 = 未选择，`image_gen` 直接不可用）。
-- 读取：`agent-host.ts:215` 改成按 `providerId` 找，找不到就报"图像提供商未配置"，
-  不再"随便挑第一个"。
-- 写入：`PUT /api/tools` 增加 `imageGen.providerId`（与 `webSearch` 同一处，别再开第二个写入口）；
-  `PUT /api/config` 继续负责 `imageProviders[]` 的增删改。
-- UI：`Tools.tsx` 的 `image_gen` 卡片里放提供商下拉 + key 输入 + "新建图像提供商"，
-  与 `web_search` 卡片同构；`Providers.tsx` 只留 LLM 提供商，删掉图像分支。
-
-**另一种更彻底的做法**：完全对齐 web_search，把 key 也挪进 `tools.imageGen.apiKeys`、删掉
-`config.imageProviders[]`。**不建议**——web_search 的四个提供商是代码里写死的，而图像提供商
-要允许自定义 baseUrl / model / 多个并存，硬套同一个结构会丢掉这些能力，还要写配置迁移。
-
-坑：
-- 现有用户配置里 `imageProviders[0].enabled && apiKey` 就是当前生效的那个；迁移时把它填进
-  `tools.imageGen.providerId`，否则升级后 `image_gen` 会突然"未配置"。
-- `publicConfig()`（`present.ts:8`）同时返回 providers 与 imageProviders，前端两个页面都读它；
-  拆页面不拆接口，避免多一次请求与两个真相。
-
-验收：Tools 页能选图像提供商并保存；选中的那个才被 `image_gen` 使用（把另一个也启用、且排在前面，
-验证不再"挑第一个"）；未选择时 `image_gen` 报"未配置"而不是静默用错提供商。
+`config.imageProviders[]` 保留（允许自定义 baseUrl / model），新增 `config.tools.imageGen.providerId`；
+`agent-host` 改成按 `providerId` 找，不再「挑第一个启用且有 Key 的」；`PUT /api/tools` 管选择、
+`PUT /api/config` 管提供商本身的增删改；`Providers.tsx` 只留 LLM 提供商，图像分支整体搬到 Tools 页。
+落地明细、迁移与实测见 §五.10。
 
 ### 已定（2026-10-23，开工前不必再问）
 
@@ -238,7 +159,15 @@ Token 采集怎么做：
 
 **插件闭环现在是完整的**：事件订阅 / 发消息 / 存储 / Agent Tool / 对话钩子五条能力都有权限、代次、`bots` 作用域三道校验，启停即生效（重建会话），失败都写进插件状态或运行日志；配置面（Schema Config）与分发面（目录安装 / ZIP 上传 / 卸载）也已接通。剩下的活是独立 WebUI 入口、后台任务/调度与几只遗留 P2。
 
-验证门禁全绿：`npm run check` / `npm run lint` / `npm test`（**192 files / 1869 tests**）；`apps/web` 的 `tsc --noEmit` 也已干净（顺手删掉 `Sessions.tsx` 里一个未使用的类型别名）。
+**斜杠命令 + 管理员已完成（2026-10-23，未提交）**：`apps/server/src/commands/` 注册表 + 内置 `new` / `compact` / `help` / `admin`，解析在群聊闸门之前（修掉「群里不 @ 就用不了 `/new`」），`config.admins` 决定谁能执行管理员命令（默认空 = 没人能），插件经 `ctx.commands.register()` 注册命令，工作台新增「高级配置 → 斜杠命令」页。明细见 §五.8。
+
+**群 / 私聊细粒度配置已完成（2026-10-23，未提交）**：对象配置多了备用模型（主模型连续失败 3 次后本轮临时换用，结束即恢复）与工具覆盖（`toolsOverride`，只作用于内置工具那一段）。同时修掉一个静默失败：provider 报错本来不会让 `prompt()` 抛错，以前只表现为「空回复」。明细见 §五.9。
+
+**图像生成提供商已下移到 Tools（2026-10-23，未提交）**：`config.tools.imageGen.providerId` 显式选择，`image_gen` 不再「挑第一个启用且有 Key 的」；「提供商」页只留 LLM 提供商，图像提供商的增删改与密钥搬进 Tools → 图像生成。老配置自动迁移。明细见 §五.10。
+
+**页面外壳已统一（2026-10-23，未提交）**：8 个管理页改用 `components/PageShell.tsx`，宽度与间距集中声明，外层背景/文字色改走主题变量（顺带修好浅色主题下的黑底）。明细见 §五.11。
+
+验证门禁全绿：`npm run check` / `npm run lint` / `npm test`（**209 files / 2034 tests**）；`apps/web` 的 `tsc --noEmit` 也已干净。
 
 **公网部署改造（2026-10-23，未提交）**：P0 四项 + 相关 P1 已落地，管理面可以暴露公网。要点：
 
@@ -264,7 +193,7 @@ Token 采集怎么做：
 | 工具策略：文件与命令类工具启用时启动 WARN + Tools 页红字；`MIUBOT_DISABLE_NATIVE_TOOLS=1` 在会话层整体禁用 | `index.ts`、`agent-host.ts`、`tool-names.ts`、`present.ts`、`Advanced.tsx` |
 | 审计日志：`audit.log`（JSON Lines，10 MB × 3），登录/登出/改密 + 所有变更类管理请求，`GET /api/audit`，工作台日志页分页签 | `audit.ts`（新）、`rotating-writer.ts`（新，从 `logging.ts` 抽出）、`auth.ts`、`http/server.ts`、`Advanced.tsx` |
 
-单测新增 `apps/server/test/auth.test.ts`（18 项）、`response.test.ts`（9 项）、`storage.test.ts`（6 项）、`logging.test.ts`（11 项）、`audit.test.ts`（4 项）、`version.test.ts`（10 项）、`update-check.test.ts`（10 项）、`http-server.test.ts`（18 项，真实 HTTP server + 真实 auth），重写 `api-security.test.ts`；`qq-inbound.test.ts` 补了入站白名单两条用例。全量 200 files / 1962 tests 通过；验收矩阵见 `deploy.md §7`（真实起进程跑过：Host 伪造 403、无凭据 401、旧后门 401、登录/登出、413/400、锁定 429、首启动口令只打印一次、会话文件只存 SHA-256；`/api/health` 带 `version`、`/api/system/update` 在 GitHub 403 时返回结构化错误而不是抛错；`/api/access` 的增删改与 env 只读、`/api/audit` 的记录顺序）。已按 §九 做反向验证：去掉会话校验 → `api-security` + `http-server` 的伪造 Cookie 用例转红；去掉 body 流式上限 → `response` 两条用例转红；去掉白名单判定 → `qq-inbound` 的越权用例转红；去掉日志脱敏 → `logging` 两条用例转红。
+单测新增 `apps/server/test/auth.test.ts`（18 项）、`response.test.ts`（9 项）、`storage.test.ts`（6 项）、`logging.test.ts`（11 项）、`audit.test.ts`（4 项）、`version.test.ts`（10 项）、`update-check.test.ts`（10 项）、`http-server.test.ts`（18 项，真实 HTTP server + 真实 auth），重写 `api-security.test.ts`；`qq-inbound.test.ts` 补了入站白名单两条用例。全量 200 files / 1962 tests 通过（当前 203 files / 1998 tests）；验收矩阵见 `deploy.md §7`（真实起进程跑过：Host 伪造 403、无凭据 401、旧后门 401、登录/登出、413/400、锁定 429、首启动口令只打印一次、会话文件只存 SHA-256；`/api/health` 带 `version`、`/api/system/update` 在 GitHub 403 时返回结构化错误而不是抛错；`/api/access` 的增删改与 env 只读、`/api/audit` 的记录顺序）。已按 §九 做反向验证：去掉会话校验 → `api-security` + `http-server` 的伪造 Cookie 用例转红；去掉 body 流式上限 → `response` 两条用例转红；去掉白名单判定 → `qq-inbound` 的越权用例转红；去掉日志脱敏 → `logging` 两条用例转红。
 
 **仍未做**：插件/技能导入在公网模式下默认关闭、审计记录字段级 diff、会话级限流、多用户。见 `deploy.md §10`。
 
@@ -389,6 +318,13 @@ Token 采集怎么做：
 20. **上传不等于可信。** ZIP 解出来之后过的是与手工放目录**完全相同**的 `inspectPackage`，不因为「是我们自己解压的」放松。产品要部署到公网，工作台能上传就等于把「写文件到服务器」暴露成了 HTTP 接口。
 21. **解压只有一份实现**（`src/archive.ts`，技能与插件共用）。它是外来字节落成本地文件的唯一入口；两套实现必然演化出两套校验，其中一套迟早漏掉某条路径检查。三道防线：zip slip（绝对路径 / 盘符 / `..` / `.` 一律拒绝）、zip bomb（条目数、单条目总量、解压后总量都要**边解边算**）、重名条目（先 `Map` 拦，落盘再叠 `flag: "wx"`）。
 22. **解压先落隐藏临时目录再 `rename`。** 临时目录用 `.incoming-<uuid>` 放在安装目录**内部**：`discover()` 跳过 `.` 前缀目录，不会登记出「manifest 合法但文件没写完」的插件；同分区 `rename` 是原子的，不会留下半个插件。
+23. **斜杠命令的解析在群聊闸门之前，但只接管已注册的命令。** 放在闸门之后会让群里不 @ 的 `/new` 永远到不了命令分支（原来的 bug）；接管所有 `/` 开头的消息则会误吞群友的普通聊天。
+24. **命令权限只有一个执行点**（`commands/dispatch.ts`），内置与插件命令共用。分散到各命令里判定，迟早出现「插件命令忘了查管理员」。管理员名单空 = 没有人能执行，这是刻意的安全默认。
+25. **命令与普通回复共用同一条串行队列**（`enqueueForTarget`）。`/compact` 与正在跑的 Agent 抢同一个会话上下文，比「命令要等一会儿」糟得多。
+26. **provider 报错不会让 `prompt()` 抛错**，而是留下一条 `stopReason: "error"` 的 assistant 消息。任何「调用失败后要做什么」的逻辑都必须同时看抛错与这条消息，否则 429 / 超时 / 网络错会静默失败（只表现为空回复）。
+27. **备用模型是单次调用内的替换**：只在 `promptWithFallback()` 的 `finally` 里恢复，`session.modelId` 永不改写。没有配置备用模型时不重试——多试只会放大等待与计费。
+28. **对象级工具覆盖只作用于内置工具**（`load_skill` / 表情包 / MCP / 插件工具各有自己的开关）。`useTools` 仍是总开关，优先级高于覆盖清单。
+29. **图像提供商是 `image_gen` 的依赖，不是 Agent 的推理后端**：它的选择放在 `tools.imageGen`（与 `webSearch.provider` 同层），配置页在 Tools 而不是「提供商」。解析失败一律报错，不回退到「第一个可用」的——隐式回退会让「选了 A 却用了 B」变成悬案。
 
 ---
 
@@ -566,6 +502,148 @@ manifest 声明形状（**扁平一层标量**，`x-ui` 只影响渲染）：
 - 测试：`packages/plugin/test/plugin-install.test.ts`（18 项）、`plugin-archive.test.ts`（23 项，含一次性跑通「解压 → 校验 → rename → 登记」）、`apps/server/test/plugins-route.test.ts` 新增安装 4 / 上传 8 / 卸载 3 项。
 - 反向验证：去掉内置保护 → 内置目录真的被删、测试转红；去掉 id 冲突检查 → 同名内置插件被覆盖、测试转红；去掉 `normalizeEntryPath` 的 `..` 判断 → zip slip 测试转红。
 
+### 8. 斜杠命令 + 管理员（✅ 2026-10-23，未提交）
+
+修掉了「群聊下无法使用 `/new`」的根因：群聊闸门（`isGroup && !mentioned → 插话`）曾排在命令判定之前。
+
+| 文件 | 职责 |
+|---|---|
+| `apps/server/src/commands/types.ts` | `CommandPermission` / `CommandInvocation` / `CommandDefinition` / 清单类型 |
+| `apps/server/src/commands/parse.ts` | `parseCommand()`：只认「整条消息以 `/` 开头 + 合法命令名」，名字大小写不敏感 |
+| `apps/server/src/commands/registry.ts` | 内置 + 插件命令合并、配置禁用、按调用者权限过滤出 `/help` 清单 |
+| `apps/server/src/commands/builtin.ts` | 内置 `new` / `compact` / `help` / `admin`（`admin` 是唯一管理员命令，只读） |
+| `apps/server/src/commands/dispatch.ts` | **唯一的权限执行点**：越权写审计 + 回通用拒绝语；失败回通用文案、细节进日志 |
+| `apps/server/src/qq/inbound.ts` | 解析位置：去重与白名单之后、素材采集与群聊闸门之前；命中即接管（`return`） |
+| `apps/server/src/http/routes/commands.ts` | `GET` / `PUT /api/commands`（清单 + 管理员名单 + 禁用清单） |
+| `apps/server/src/runtime.ts` / `app-state.ts` | `config.admins: string[]`、`config.commands.disabled: string[]` + 归一化 |
+| `packages/plugin/src/host/commands.ts` | 插件命令注册表（命名冲突、代次存活、`bots` 作用域、执行前复核） |
+| `packages/plugin/src/host/context.ts` | `ctx.commands.register()`，权限 `command:register`，与工具/扩展同一套守卫 |
+| `apps/web/src/pages/Commands.tsx` | 「高级配置 → 斜杠命令」：管理员名单 + 命令清单 + 逐个启停 |
+| `apps/web/src/pages/Plugins.tsx` | 插件卡片多一排 `/命令` chip |
+
+要点：
+
+- **解析位置就是这次修 bug 的全部**：命令必须在群聊闸门之前判定，否则群里不 @ 的 `/new` 永远到不了。
+- **只接管已注册的命令**。其余以 `/` 开头的普通聊天照旧走插话——否则群友的 `/` 开头消息会被吞掉。私聊/被 @ 时未注册的 `/xxx` 仍按普通文本进 Agent。
+- **带附件的消息不当命令**：命令没法消费附件，接管等于把附件静默丢掉。
+- **权限只有一个执行点**（`dispatch.ts`），内置与插件命令共用；越权写 `audit.record({ action: "command.denied" })` 并回「这个命令只有管理员能用。」。
+- **管理员默认空 = 没有人能执行**（安全默认），启动日志 WARN + 页面顶部红字提示。不用 `access.allowedPeers` 兼任：那是「谁能用 Bot」，这里是「谁能让 Bot 做管理动作」。
+- **禁用 = 当作不存在**，消息按普通聊天继续处理（不是「静默吞掉」）。默认全启用，与插件白名单同一取向。
+- **插件命令不能占用内置命令名**（`reservedCommandNames` 由组合根传入），插件之间也不能重名；`permission` 字段必填，不设默认值——写错就 setup 失败，而不是静默提权。
+- **命令与普通回复共用同一条串行队列**（`enqueueForTarget`）：`/compact` 不能和正在跑的 Agent 抢上下文。
+- **命令回复走被动回复锚点**（`channel.sendText(message.replyTarget, …)`），不新开主动推送。
+- 注意权限名是 `command:register`（与既有的 `tool:register` / `extension:register` 同构），不是原计划里写的 `plugin:command:register`。
+- 测试：`apps/server/test/commands.test.ts`（16 项：解析 / 注册表 / 分发）、`commands-route.test.ts`（5 项）、`qq-inbound.test.ts` 新增 6 项（群聊非 @ `/new`、`/help`、越权拒绝 + 审计、管理员放行、禁用回落、未注册 `/foo` 仍走插话）、`packages/plugin/test/plugin-commands.test.ts`（9 项）。
+- 反向验证：把命令判定挪回群聊闸门之后 → 「群聊非 @ `/new`」转红；去掉 `dispatch` 里的权限判断 → 两条越权用例转红；去掉 `command:register` 守卫 → 「没有权限时拒绝注册」转红。
+- 真进程冒烟（`MIUBOT_DATA_DIR` 指到临时目录、`MIUBOT_PORT=18878`）：`/api/health` 200；未登录 `/api/commands` 401；登录后 `GET /api/commands` 返回 4 条内置命令、`PUT` 写 `admins: ["user-1"]` + `disabled: ["compact"]` 后 `config.json` 落盘、`audit.log` 记 `api.mutation`、响应里 `compact.enabled=false`；启动日志出现「未配置管理员」WARN。
+
+**需要人工验证（真机）**：群里不 @ 发 `/new` 能新建会话；`/help` 的清单与工作台一致；非管理员发 `/admin` 被拒且审计日志里出现 `command.denied`；在「斜杠命令」页关掉 `/help` 后它不再响应；装一个注册命令的插件后，该命令出现在同一张表里并能执行。
+
+### 9. 群 / 私聊细粒度配置：备用模型 + 分作用域工具（✅ 2026-10-23，未提交）
+
+| 文件 | 职责 |
+|---|---|
+| `apps/server/src/agent-prompt.ts`（新） | `promptWithFallback()`：一轮内的失败计数、第 3 次失败换模型、`finally` 恢复主模型 |
+| `apps/server/src/agent-host.ts` | `PeerConfig` 增 `fallbackProviderId`/`fallbackModelId`/`toolsOverride`；`getFallbackModel()`；`enabledToolNames()` 用 `toolsOverride` |
+| `apps/server/src/app-state.ts` | 新字段默认值与老配置归一化（缺省 = 不启用备用、继承全局工具） |
+| `apps/server/src/qq/inbound.ts` | 走 `promptWithFallback`；失败即取消流式并清空 `streamedText`；记录 `lastModelUsed`/`lastFallbackAt` |
+| `apps/server/src/http/routes/sessions.ts` | `PUT /api/peer-config` 校验备用模型与工具覆盖；`GET` 多返回 `tools` 目录与 `globalTools` |
+| `apps/web/src/pages/Sessions.tsx` | 对象配置面板：备用模型下拉 + 「自定义工具」多选；会话详情显示上次回答模型；中间列改成整列 `overflow-y-auto`（内容变高后小屏会被 `overflow-hidden` 裁掉） |
+
+要点：
+
+- **失败判定有两个来源**：`prompt()` 抛错（缺模型、缺 Key 这类前置校验）与 assistant 消息的
+  `stopReason: "error"`（provider 报错走这条，**不会抛错**）。只看前者会让 429 / 超时 / 网络错静默失败。
+- **没有备用模型时只跑一次**：多试几次只会放大等待与计费，换不来任何东西。所以「3 次」只在配了备用模型时存在。
+- **备用模型的解析是懒的**：`getFallbackModel()` 每次都读配置；配置了但不可用（提供商停用 / 缺 Key / 模型被删）时
+  只告警一次（`warnedFallbacks` 去重），然后按「没配」处理——静默不重试最难排查。
+- **恢复主模型在 `finally`**：成功、失败、切换本身抛错都要恢复；恢复失败写 WARN 并明说「会话可能停在备用模型上」。
+- **`session.modelId` 不变**：备用只是单次调用内的替换，绝不写进会话配置。
+- **流式（C2C）失败一次就退化**：先 `stream.cancel()` 再清空 `streamedText`，`streamUsable = false`；
+  重试成功后用普通文本整段发送。QQ 的 stream 绑在 `msgId` 上，重开没有保证，不去赌。
+- **工具覆盖只作用于「内置 + 可配置」那一段**：`load_skill` / 表情包 / MCP / 插件工具仍由各自开关决定。
+  `useTools` 仍是总开关（关掉 = 一个工具都不启用）。
+- 测试：`apps/server/test/agent-prompt.test.ts`（7 项）、`peer-config-route.test.ts`（7 项）、
+  `plugin-tool-session.test.ts` 新增「对象自定义工具清单」1 项。
+- 反向验证：去掉 `enabledToolNames` 里的 `toolsOverride` → 自定义工具用例转红；去掉 `finally` 里的恢复 → 两条备用模型用例转红。
+- 真进程冒烟（`MIUBOT_PORT=18880` + 预置一个假 Key 的提供商）：`PUT /api/peer-config` 保存备用模型与
+  `toolsOverride: ["web_search"]` → 200 且 `peer-configs.json` 落盘；只填一半备用模型 → 400。
+
+**已知限制（先记着，别当成 bug）**：
+
+- 重试会重复 `prompt()`：provider 在运行中途失败时，用户消息已经进了 Pi 的会话树，所以成功的那次上下文里
+  可能有 2–3 条相同的用户消息。要根治得先有「回滚上一轮」的公开 API（`navigateTree` 能做但副作用大），不在本轮范围。
+- 备用模型只覆盖**入站回复**这条路径。智能插话（`proactive.ts`）与表情包打标（`sticker-tagging.ts`）各自
+  调用 `prompt()`，失败仍只写日志，不换模型——它们不是「用户等着的回复」。
+
+**需要人工验证（真机）**：给某个群配一个不可用的主模型（删掉 Key 或指向不存在的模型）+ 一个可用的备用模型，
+发一条消息 → 日志出现 3 次「调用失败」+ 1 次「本轮改用备用模型」，回复正常，会话详情显示「用过备用模型」，
+**下一条消息仍从主模型开始**（日志第 1 次失败又是主模型）。另配一个只留 `web_search` 的群 → 该群 `bash` 不可用、其它群不受影响。
+
+### 10. 图像生成提供商下移到 Tools（✅ 2026-10-23，未提交）
+
+| 文件 | 职责 |
+|---|---|
+| `apps/server/src/runtime.ts` | `ToolSettings` 增 `imageGen: { providerId }`（空 = 未选择） |
+| `apps/server/src/app-state.ts` | 新字段默认值 + **迁移**：老配置里「第一个启用且有 Key 的图像提供商」填进 `providerId` |
+| `apps/server/src/image-provider.ts`（新） | `resolveImageProvider()`：未选择 / 不存在 / 停用 / 缺 Key 四种失败都抛错 |
+| `apps/server/src/agent-host.ts` | `image_gen` 改用 `resolveImageProvider()`，不再挑第一个 |
+| `apps/server/src/http/routes/tools.ts` | GET 多返回 `imageGen`（选择 + 提供商清单，不含密钥）；PUT 校验并保存 `imageGen.providerId` |
+| `apps/web/src/pages/Advanced.tsx` | Tools 页 `image_gen` 卡片：提供商下拉 + 密钥 + 新建/删除，与 `web_search` 同构 |
+| `apps/web/src/pages/Providers.tsx` | 删掉图像提供商分支（列表、弹窗、"添加提供商"里的类型下拉），只留 LLM 提供商 |
+
+要点：
+
+- **`config.imageProviders[]` 保留**：图像提供商要允许自定义 baseUrl / model 且可多个并存，不像
+  `webSearch` 是代码里写死的四家枚举。硬套同一结构会丢掉这些能力。
+- **显式选择是这次的重点，不只是换页面**：旧逻辑「第一个启用且有 Key 的」挑错了只会表现成
+  「画出来的东西不对」。现在四种失败都报错，**不回退到另一个提供商**——回退会让「我明明选了 A，
+  为什么是 B」变成悬案。
+- **两个写入口各管一件事**：`PUT /api/tools` 管「选哪个」（与 `webSearch.provider` 同层），
+  `PUT /api/config` 管提供商本身的增删改（持有 `imageProviders[]` 与密钥合并逻辑）。
+- **迁移**：`app-state.loadConfig()` 在老配置没有 `tools.imageGen` 时，把当时真正生效的那个 id 写进去；
+  已有显式值（包括用户主动清空成 `""`）不被覆盖。
+- **密钥不回传**：`GET /api/tools` 的 `imageGen.providers` 复用 `publicConfig()` 的投影，
+  只有 `apiKeyConfigured`，没有 `apiKey`。
+- 测试：`tools-route.test.ts`（7 项：GET 投影 / 选择 / 保留 / 清空 / 不存在 / 缺 Key / 停用）、
+  `image-provider.test.ts`（5 项，含「两个都可用时用选中的那个」）、`app-state-image-gen.test.ts`（3 项迁移）。
+- 反向验证：把 `resolveImageProvider` 改回「第一个启用且有 Key 的」→ 4 条用例转红。
+- 真进程冒烟：预置只有 `imageProviders` 的老配置 → `GET /api/tools` 的 `imageGen.providerId` 已自动指向
+  那个可用提供商；`PUT` 选 `nope` → 400；`config.json` 落盘 `{"providerId":"img-a"}`。
+
+**需要人工验证（真机）**：Tools → 图像生成里选 A 家（另有一个也启用的 B 家排在前面）→ 让 Agent 画图，
+确认用的是 A；把选择改成「未选择」→ Agent 画图时收到「尚未选择提供商」而不是用 B；在 Tools 页新建一个
+图像提供商 → 立即出现在下拉里并能选中；「提供商」页不再出现图像区块。
+
+### 11. PageShell：页面外壳统一（✅ 2026-10-23，未提交）
+
+`apps/web/src/components/PageShell.tsx`（新）接管所有管理页的外层容器：
+
+| 页面 | 宽度 | 备注 |
+|---|---|---|
+| Dashboard / Plugins / Advanced（8 个 section）/ Commands | 760 | 默认值 |
+| Personas / Platforms | 900 | `gap={5}`（原来就是 `space-y-5`） |
+| Providers | 980 | `gap={5}` |
+| Stickers | 1100 | 原来是唯一居中的那个 |
+| Debug / Sessions | — | 不动：一个是全高聊天布局，一个是三栏 |
+
+要点：
+
+- **不只是补 `mx-auto`**：外层背景以前一半是 `bg-black text-white`、一半是主题变量。`--bg-app` 在
+  浅色主题下是 `#e8e6e1`，所以那几页在浅色模式下一直是**黑底白字**。统一走变量后顺带修好了。
+- 宽度与间距都做成字面量映射（`WIDTHS` / `GAPS`），Tailwind 才扫得到类名；`max-w-[${width}px]`
+  这种拼接不会生成 CSS。
+- 迁移时踩到的坑：这些页的闭合标签结构各不相同（`</div></div>;` / `</div></section>;` /
+  `return (` 里没有分号），按行号替换时**删错一个 `</div>` 就会把子组件的闭合标签吃掉**——
+  `Advanced.tsx` 的 `AccessCard` 就被误当成 `Logs` 的结尾替换掉了，tsc 报的却是几百行之后的语法错。
+  结论：这类迁移用 `tsc` 当唯一判据，改完立刻跑，别攒着。
+
+验收（人工）：1280 宽下各页左右留白相等；缩到 900 宽内容跟着缩且仍居中；**切到浅色主题**后
+Dashboard / Plugins / 高级配置不再黑底。
+
+顺带改了左侧栏（`components/Sidebar.tsx`）：上半区（Logo + 导航 + 高级配置）`min-h-0 flex-1 overflow-y-auto`，
+下半区（主题 / 运行日志 / 设置 / 退出）`shrink-0` 常驻。导航项会随功能增加而变长，小屏下原来会把下半区顶出屏幕。
+
 ---
 
 ## 六、已知遗留问题
@@ -578,6 +656,10 @@ manifest 声明形状（**扁平一层标量**，`x-ui` 只影响渲染）：
 | P2 | `agent-host.ts` | 服务端从不调用 `session.bindExtensions()`，因此 `session_start` / `resources_discover` 这两个钩子对插件**永不触发**（`ExtensionRunner` 本身在会话构造时就建好了，`before_agent_start` / `tool_call` / `message_*` 等都正常）。Pi 那边这两个事件由 mode 层（interactive / print / rpc）绑定，Miubot 没有对应的 UI 层，是有意跳过的；若将来有插件需要它们，再补一次最小绑定 |
 | ✅ | `src/tool-names.ts` | 阶段 B 已收敛：`nativeToolNames` / `toolNames` / `auxiliaryToolNames` 单一来源，`present.ts`、`agent-host.ts`、`routes/tools.ts`、组合根的保留集都从这里取 |
 | P2 | `routes/plugins.ts` | 启停插件后无条件 `rebuildAgentSessions()`：若有会话正在流式回复会被中断。可改成 `anyAgentLoopRunning()` 为真时延后到空闲再重建 |
+| P3 | `packages/plugin/src/host/commands.ts` | 插件命令只有原始 `args` 文本，没有参数 schema 与校验。需要结构化参数时再扩，别先支持一半 |
+| P3 | `apps/server/src/commands/` | 命令只在 QQ 入站流程里分发，调试台（`/api/chat`）走不到；要一致就得把分发抽成「消息来源无关」的入口 |
+| P2 | `apps/server/src/agent-prompt.ts` | 重试会重复 `prompt()`：provider 在运行中途失败时，用户消息已经进了 Pi 的会话树，成功那次的上下文里可能有 2–3 条相同用户消息。要根治需要「回滚上一轮」的公开 API |
+| P2 | `proactive.ts` / `sticker-tagging.ts` | 这两条路径各自调用 `prompt()`，不走 `promptWithFallback`：失败只写日志、不换备用模型。它们不是「用户等着的回复」，但失败同样是静默的空结果 |
 
 P2 里两项需要先确认语义再动：`take()` 改为引用计数会改变被动回复配额语义；`readAll()` 改为抛错会影响容错策略。会话重建那条属已知取舍——插件启停是低频管理动作，先保证工具集正确。
 
