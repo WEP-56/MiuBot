@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Sidebar, type PageId } from "./components/Sidebar";
-import { ThemeProvider } from "./theme";
 import { Dashboard } from "./pages/Dashboard";
 import { Platforms } from "./pages/Platforms";
 import { Providers } from "./pages/Providers";
@@ -63,22 +62,20 @@ export default function App() {
   };
 
   return (
-    <ThemeProvider>
-      <div
-        className="flex h-screen w-screen overflow-hidden font-sans antialiased"
-        style={{ background: "var(--bg-app)", color: "var(--text-main)" }}
-      >
-        {/* Left Sidebar */}
-        <Sidebar current={page} onChange={setPage} />
+    <div
+      className="flex h-screen w-screen overflow-hidden font-sans antialiased"
+      style={{ background: "var(--bg-app)", color: "var(--text-main)" }}
+    >
+      {/* Left Sidebar */}
+      <Sidebar current={page} onChange={setPage} />
 
-        {/* Main Content Pane */}
-        <main
-          className="flex-1 h-full overflow-hidden flex flex-col"
-          style={{ background: "var(--bg-app)" }}
-        >
-          {renderContent()}
-        </main>
-      </div>
-    </ThemeProvider>
+      {/* Main Content Pane */}
+      <main
+        className="flex-1 h-full overflow-hidden flex flex-col"
+        style={{ background: "var(--bg-app)" }}
+      >
+        {renderContent()}
+      </main>
+    </div>
   );
 }

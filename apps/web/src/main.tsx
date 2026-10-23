@@ -1,14 +1,11 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
-import App from "./App";
-import { ensureApiSession } from "./utils/api";
+import { AuthGate } from "./AuthGate";
 
-// 先换取管理 API 会话 Cookie 再挂载页面：各页面一挂载就发请求，不能抢在前面。
-void ensureApiSession().finally(() => {
-  createRoot(document.getElementById("root")!).render(
-    <StrictMode>
-      <App />
-    </StrictMode>
-  );
-});
+// 先过登录闸门再挂载工作台：各页面一挂载就发请求，未登录时会拿一串 401。
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <AuthGate />
+  </StrictMode>
+);

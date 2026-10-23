@@ -1,6 +1,7 @@
 import { Icon } from "../components/Icon";
 import { useTheme } from "../theme";
 import { useEffect, useRef, useState } from "react";
+import { changePassword } from "../utils/api";
 
 /* 主动行为页面 */
 export function Proactive() {
@@ -236,6 +237,91 @@ export function Logs() {
   );
 }
 
+/* 管理员口令：管理面唯一的凭据，改完立刻让其他会话失效 */
+function PasswordCard() {
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    if (busy) return;
+    if (next !== confirm) { setNotice("两次输入的新口令不一致"); return; }
+    setBusy(true); setNotice("");
+    const result = await changePassword(current, next);
+    setBusy(false);
+    if (!result.ok) { setNotice(result.message); return; }
+    setCurrent(""); setNext(""); setConfirm("");
+    setNotice("口令已更新，其他已登录会话已作废");
+  };
+  return (
+    <div className="sketch-card p-5 space-y-3">
+      <div className="text-[14px] font-bold text-white">管理员口令</div>
+      <p className="text-[12px] text-[#888888]">口令散列保存在数据目录的 admin-password。修改后其他浏览器上的会话立即失效，当前会话保留。</p>
+      <div className="grid max-w-lg gap-3 sm:grid-cols-3">
+        <label className="text-[13px] text-[#cccccc]">当前口令<input className="sketch-input mt-1 w-full" type="password" autoComplete="current-password" value={current} onChange={(event) => setCurrent(event.target.value)}/></label>
+        <label className="text-[13px] text-[#cccccc]">新口令<input className="sketch-input mt-1 w-full" type="password" autoComplete="new-password" value={next} onChange={(event) => setNext(event.target.value)}/></label>
+        <label className="text-[13px] text-[#cccccc]">确认新口令<input className="sketch-input mt-1 w-full" type="password" autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)}/></label>
+      </div>
+      <p className="text-[11px] text-[#777777]">至少 8 位，且不能与当前口令相同。</p>
+      <div className="flex items-center gap-3"><button className="btn-pill-dark" disabled={busy || !current || !next} onClick={() => void save()}>{busy ? "保存中…" : "修改口令"}</button>{notice && <span className="text-xs text-[#aaaaaa]" role="status">{notice}</span>}</div>
+    </div>
+  );
+}
+
+/* 版本与更新检查：只提示，不自动升级 */
+type UpdateStatus = {
+  enabled: boolean;
+  current: string;
+  latest: string | null;
+  updateAvailable: boolean;
+  url: string | null;
+  publishedAt: string | null;
+  checkedAt: string | null;
+  error: string | null;
+};
+
+function VersionCard() {
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const load = async (refresh: boolean) => {
+    setBusy(true); setError("");
+    try {
+      const response = await fetch(`/api/system/update${refresh ? "?refresh=1" : ""}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      setStatus(await response.json() as UpdateStatus);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally { setBusy(false); }
+  };
+  useEffect(() => { void load(false); }, []);
+  const headline = !status ? "读取中…" : status.enabled === false ? "更新检查已关闭" : status.updateAvailable ? `有新版本 v${status.latest}` : "已是最新版本";
+  return (
+    <div className="sketch-card p-5 space-y-3">
+      <div className="text-[14px] font-bold text-white">版本与更新</div>
+      <div className="flex flex-wrap items-center gap-3 text-[13px] text-[#cccccc]">
+        <span className="pill-gray">当前 v{status?.current ?? "…"}</span>
+        <span className={status?.updateAvailable ? "pill-green" : "text-[#888888]"}>{headline}</span>
+      </div>
+      {status?.updateAvailable && (
+        <div className="space-y-1 text-[12px] text-[#888888]">
+          <p>升级不会自动进行：这套系统的升级等于换掉正在跑的代码，由你决定时机。</p>
+          <p className="font-mono text-[11.5px] text-[#aaaaaa]">docker compose pull &amp;&amp; docker compose up -d　/　git pull &amp;&amp; systemctl restart miubot</p>
+          {status.url && <a className="text-[#22c55e] underline" href={status.url} target="_blank" rel="noreferrer">查看发布说明</a>}
+        </div>
+      )}
+      {status?.enabled === false && <p className="text-[12px] text-[#888888]">MIUBOT_UPDATE_CHECK=0：进程不会向 GitHub 发起任何请求。</p>}
+      {status?.error && <p className="text-[12px] text-[#f59e0b]">检查失败：{status.error}</p>}
+      {error && <p className="text-[12px] text-[#f59e0b]">无法读取版本信息：{error}</p>}
+      <div className="flex items-center gap-3">
+        <button className="btn-pill-dark" disabled={busy || status?.enabled === false} onClick={() => void load(true)}>{busy ? "检查中…" : "检查更新"}</button>
+        {status?.checkedAt && <span className="text-[11px] text-[#777777]">上次检查：{new Date(status.checkedAt).toLocaleString()}</span>}
+      </div>
+    </div>
+  );
+}
+
 /* 设置 */
 export function Settings() {
   const { theme, setTheme } = useTheme();
@@ -306,6 +392,10 @@ export function Settings() {
             浅色为暖灰纸面 + 米白卡片的柔光纸质感,非纯白,不晃眼;偏好会自动记住。
           </p>
         </div>
+
+        <PasswordCard />
+
+        <VersionCard />
 
         <div className="sketch-card p-5 space-y-3">
           <div className="text-[14px] font-bold text-white">存储管理</div>

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Icon } from "./Icon";
 import { useTheme } from "../theme";
+import { logout } from "../utils/api";
 
 export type PageId =
   | "dashboard"
@@ -181,6 +182,17 @@ export function Sidebar({ current, onChange }: SidebarProps) {
         >
           <Icon.Gear size={16} className={current === "settings" ? "text-white" : "text-[#888888]"} />
           <span>设置</span>
+        </button>
+
+        <button
+          onClick={() => {
+            // 服务端撤销会话后刷新：AuthGate 会重新探测并停在登录页。
+            void logout().finally(() => window.location.reload());
+          }}
+          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13.5px] text-left transition-colors text-[#999999] hover:text-white hover:bg-[#151515]"
+        >
+          <Icon.X size={16} className="text-[#888888]" />
+          <span>退出登录</span>
         </button>
       </div>
     </aside>
