@@ -1,8 +1,11 @@
 name: CI
 
 # 也被 release.yml 通过 `workflow_call` 复用：发版前必须先过同一套门禁。
+# 版本 tag 上不再单独跑一份：release 里的 verify 已经跑过了，两边的 concurrency 组相同，
+# 同时触发会互相取消，留下一排误导性的「cancelled」。
 on:
   push:
+    tags-ignore: ["v*"]
   pull_request:
   workflow_call:
 
