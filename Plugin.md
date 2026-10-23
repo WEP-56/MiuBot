@@ -506,6 +506,8 @@ Agent 主动发言是 Agent 行为策略，插件定时任务是通用调度机�
 
 首版仅支持管理员明确安装的**本地可信插件**，可在后续扩展 Git 仓库或包安装。插件代码运行在当前 Node 进程中时，即使 API 只暴露少量能力，仍可能访问进程文件、环境变量和网络；Manifest 权限声明只是**宿主管理契约**，不是操作系统级隔离。
 
+**工作台支持 ZIP 上传后，攻击面从「谁能往磁盘放文件」变成「谁能调管理 API」。** 这不等同于账号体系：管理 API 的认证只解决「谁进来」，进来的仍然是能在服务器上执行任意 Node 代码的包。所以解压侧必须当成处理敌意输入来做——路径逃逸（zip slip）、解压炸弹、重名条目覆盖三条都要拦，并且解压出来的内容要和手工放的目录过同样的校验（上传不等于可信）。真正的多租户 / 社区市场需要独立进程或容器隔离，那不是这一层的活。
+
 如果未来要支持不可信社区插件，必须另行评估独立进程 / 容器、受控 IPC、资源配额等安全隔离设计，不能把“接口上没有给”当成真正的权限隔离。
 
 ## 12. 权限与作用域（P0）
@@ -533,6 +535,7 @@ Agent 主动发言是 Agent 行为策略，插件定时任务是通用调度机�
 | 启用/停用 | `POST /api/plugins/:id/enable` / `disable` | ✅ 已实现 |
 | 重载 | `POST /api/plugins/:id/reload` | ✅ 已实现（重读 manifest） |
 | 安装本地插件 | `POST /api/plugins/install` | ✅ 已实现（body `{ path }`，本地目录包；不覆盖、不自动启动） |
+| 上传插件包 | `POST /api/plugins/import` | ✅ 已实现（`content-type: application/zip` + 原始字节，上限 20 MB；解压后走同一套校验，原子落位） |
 | 卸载 | `POST /api/plugins/:id/uninstall` | ✅ 已实现（body `{ deleteData, deleteConfig }`，默认都保留；内置插件拒绝） |
 
 仍是拟定的端点：
@@ -664,7 +667,10 @@ Agent 主动发言是 Agent 行为策略，插件定时任务是通用调度机�
 - [x] 本地可信包安装 / 卸载（2026-10-23）。`inspectPackage` 校验目录包（manifest、入口存在、
       拒绝符号链接、文件数与体积上限、绝对路径），复制到 `<installDir>/<manifest id>`；
       **不覆盖、不自动启动**；卸载先 `stop()` 再删目录，数据与配置默认保留、删除要分别勾选。
-      范围仍是本地可信目录包：不做网页上传、zip、远程下载。
+- [x] ZIP 上传导入（2026-10-23）。`POST /api/plugins/import` 收原始字节，解压到
+      `<installDir>/.incoming-<uuid>` → 过与目录安装**完全相同**的 `inspectPackage` → 原子 `rename`。
+      解压与技能导入共用 `packages/plugin/src/archive.ts`：zip slip / zip bomb / 重名条目三道防线。
+      这一条是为「部署到公网」准备的——工作台能上传，等于把「写文件到服务器」暴露成了 HTTP 接口。
 
 ### 阶段 D：后续扩展（P1+）
 
@@ -685,6 +691,7 @@ Agent 主动发言是 Agent 行为策略，插件定时任务是通用调度机�
 8. **异常隔离：** 插件 setup、事件处理或 Tool 执行异常时，记录错误且正常 QQ 消息处理继续运行。
 9. **WebUI 隔离：** 独立页面不会获得 Miubot 管理后台的 Cookie / Token；远程部署不会错误打开访问者自己电脑的 localhost。
 10. **工程边界：** Plugin Host 不导入 `apps/server`，新增 Tool 实现不进入 Server，`npm run check` 和相关单测通过。
+11. **上传防御：** 手工构造的恶意 ZIP——含 `../../x` 条目、写死盘符、几十 KB 解出上百 MB、同一路径两条记录——全部在解压阶段被拒，且失败后安装目录里不残留 `.incoming-*` 临时目录。
 
 ## 16. 待决策事项
 

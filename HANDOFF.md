@@ -18,11 +18,11 @@
 
 **阶段 C 的 Schema Config 已完成（2026-10-23，`88fee6d`）**：manifest 声明 `config` → 宿主校验并合成默认值 → 工作台渲染表单 → 插件从 `ctx.config` 读。`miubot.welcome` 已从「把欢迎语存在插件存储里」迁到 manifest 配置。
 
-**本地插件包的安装 / 卸载已完成（2026-10-23，未提交）**：`POST /api/plugins/install` 从本地目录复制插件包，`POST /api/plugins/:id/uninstall` 删除插件目录并按勾选处理数据与配置。范围仍是本地可信包——不做网页上传、zip、远程安装。
+**插件包的安装 / 上传 / 卸载已完成（2026-10-23，未提交）**：`POST /api/plugins/install` 从本地目录复制插件包，`POST /api/plugins/import` 接收 ZIP 上传（工作台拖拽或选文件），`POST /api/plugins/:id/uninstall` 删除插件目录并按勾选处理数据与配置。ZIP 解压与技能导入共用 `packages/plugin/src/archive.ts`。
 
-**插件闭环现在是完整的**：事件订阅 / 发消息 / 存储 / Agent Tool / 对话钩子五条能力都有权限、代次、`bots` 作用域三道校验，启停即生效（重建会话），失败都写进插件状态或运行日志；配置面（Schema Config）与分发面（本地安装/卸载）也已接通。剩下的活是独立 WebUI 入口、后台任务/调度与几只遗留 P2。
+**插件闭环现在是完整的**：事件订阅 / 发消息 / 存储 / Agent Tool / 对话钩子五条能力都有权限、代次、`bots` 作用域三道校验，启停即生效（重建会话），失败都写进插件状态或运行日志；配置面（Schema Config）与分发面（目录安装 / ZIP 上传 / 卸载）也已接通。剩下的活是独立 WebUI 入口、后台任务/调度与几只遗留 P2。
 
-验证门禁全绿：`npm run check` / `npm run lint` / `npm test`（**191 files / 1838 tests**）。
+验证门禁全绿：`npm run check` / `npm run lint` / `npm test`（**192 files / 1869 tests**）；`apps/web` 的 `tsc --noEmit` 也已干净（顺手删掉 `Sessions.tsx` 里一个未使用的类型别名）。
 
 最近八次提交：
 
@@ -136,6 +136,9 @@
 17. **安装不覆盖、不自动启动。** 覆盖会让一次手滑把在用的插件换成半成品，升级必须是显式动作；启动与否取决于配置白名单，宿主不读配置——装完由路由按 `isAllowedByConfig` 决定，否则会造出「配置里禁用却跑着、下次重启就消失」的假活。
 18. **卸载默认保留数据与配置**，删除要分别显式勾选。删代码是明确动作，删用户数据不是。
 19. **插件包里的符号链接一律拒绝。** `cp` 按链接本身复制，装完链接仍指向源目录之外，等于绕过了 `entry` 的路径校验。安装路径还必须是绝对路径：相对路径会按服务进程的 cwd 解析，用户以为是仓库根、实际是 `apps/server`。
+20. **上传不等于可信。** ZIP 解出来之后过的是与手工放目录**完全相同**的 `inspectPackage`，不因为「是我们自己解压的」放松。产品要部署到公网，工作台能上传就等于把「写文件到服务器」暴露成了 HTTP 接口。
+21. **解压只有一份实现**（`src/archive.ts`，技能与插件共用）。它是外来字节落成本地文件的唯一入口；两套实现必然演化出两套校验，其中一套迟早漏掉某条路径检查。三道防线：zip slip（绝对路径 / 盘符 / `..` / `.` 一律拒绝）、zip bomb（条目数、单条目总量、解压后总量都要**边解边算**）、重名条目（先 `Map` 拦，落盘再叠 `flag: "wx"`）。
+22. **解压先落隐藏临时目录再 `rename`。** 临时目录用 `.incoming-<uuid>` 放在安装目录**内部**：`discover()` 跳过 `.` 前缀目录，不会登记出「manifest 合法但文件没写完」的插件；同分区 `rename` 是原子的，不会留下半个插件。
 
 ---
 
@@ -289,25 +292,28 @@ manifest 声明形状（**扁平一层标量**，`x-ui` 只影响渲染）：
 - 测试：`packages/plugin/test/plugin-config.test.ts`（27 项，含真实宿主 + 真实 `.ts` 入口的端到端：保存 → 重启 → 插件读到新值）+ `apps/server/test/plugins-route.test.ts` 新增 9 项（secret 不回显、校验失败不落盘、停用插件不自启）。
 - 已按 §九 做过反向验证：去掉 `inspectConfig` 的 secret 剔除 → 密钥漏进响应，测试转红；把 `compactAgainstDefaults` 换成全量写入 → 默认值被钉死，测试转红。
 
-### 7. 本地插件包安装 / 卸载（✅ 2026-10-23，尚未提交）
+### 7. 插件包安装 / ZIP 上传 / 卸载（✅ 2026-10-23，尚未提交）
 
 | 文件 | 职责 |
 |---|---|
-| `packages/plugin/src/host/install.ts` | `inspectPackage`（目录包校验）、`copyPackage`、`deletePackage` |
-| `packages/plugin/src/host/host.ts` | `install(sourceDir)` / `uninstall(id, {deleteData, deleteConfig})`；`PluginStatus.directory` / `.removable` |
-| `apps/server/src/http/routes/plugins.ts` | `POST /api/plugins/install`、`POST /api/plugins/:id/uninstall` |
+| `packages/plugin/src/archive.ts` | `readZip`（ZIP 读取 + 三道防线）、`findArchiveRoot`、`entriesUnderRoot`；技能与插件共用 |
+| `packages/plugin/src/host/install.ts` | `inspectPackage`（目录包校验）、`copyPackage`、`deletePackage`、`extractPackage`（解压到隐藏临时目录） |
+| `packages/plugin/src/host/host.ts` | `install(sourceDir)` / `importArchive(bytes)` / `uninstall(id, {deleteData, deleteConfig})`；`reserveTarget` 与 `finishInstall` 两条入口共用；`PluginStatus.directory` / `.removable` |
+| `apps/server/src/http/routes/plugins.ts` | `POST /api/plugins/install`、`POST /api/plugins/import`、`POST /api/plugins/:id/uninstall`；`respondInstalled()` 统一收尾 |
 | `apps/server/src/index.ts` | `installDir: pluginsDir`；`deleteAssets` 按勾选删 `plugin-data` / `plugin-config` |
-| `apps/web/src/pages/Plugins.tsx` | 顶部「安装」面板（路径输入）、卡片「卸载」二次确认 + 两个勾选 |
+| `apps/web/src/pages/Plugins.tsx` | 顶部「安装」面板（拖拽区 + 选文件 + 路径兜底）、卡片「卸载」二次确认 + 两个勾选 |
 
 要点：
 
-- **范围**：本地目录包。不做网页上传、不做 zip、不做远程下载。Node 没有内置解压，为这一条引依赖不值得，而管理员本来就在这台机器上。
-- **安装做什么**：校验 → 复制到 `<installDir>/<manifest id>` → `discover()`。**不启动**（见 §三.17），启动由路由按配置决定。装完 `rebuildAgentSessions()`，让新工具进已有会话。
-- **校验项**：manifest 合法、入口文件真实存在、无符号链接、文件数 ≤ 2000 / 体积 ≤ 32 MB、路径是绝对路径、id 不与已有条目冲突（含内置同名插件——装上去了也会被「首个目录优先」压住）。
+- **两条安装入口，一套校验**。目录安装给本机开发用（不必先打包），ZIP 上传给工作台用（要部署到公网时只能走这条路）。两者最终都落到 `<installDir>/<manifest id>`，共用 `reserveTarget`（id 冲突 / 目标目录已存在）与 `finishInstall`（`discover()` + 回读）。
+- **传输方式比 multipart 简单**：`content-type` 里含 `zip` 即可（Windows 浏览器可能报 `application/x-zip-compressed`），body 是原始字节，与 `/api/skills/import` 保持一致。请求体上限 20 MB，先挡在解压之前。
+- **装完不启动**（见 §三.17）。启动由路由按 `isAllowedByConfig` 决定，装完再 `rebuildAgentSessions()`，让新工具进已有会话。宿主自己不读配置，所以这个判断只写一次。
+- **校验项**：manifest 合法、入口文件真实存在、无符号链接、文件数 ≤ 2000 / 体积 ≤ 32 MB、路径是绝对路径（目录入口）、id 不与已有条目冲突（含内置同名插件）。
 - **卸载做什么**：`stop()` → 删目录 → 按勾选删资源 → 从 `entries` 移除 → 路由清掉 `config.plugins` 里的 id 并 `save()`。删目录失败时条目保留，用户可以重试。
 - **内置插件拒绝卸载**：`isInstalledDirectory()` 用 `relative()` 判断目录是否在 `installDir` 内，而不是字符串前缀（`plugins-evil` 会以 `plugins` 开头）。
-- 测试：`packages/plugin/test/plugin-install.test.ts`（18 项）+ `apps/server/test/plugins-route.test.ts` 新增 7 项。
-- 反向验证：去掉内置保护 → 内置目录真的被删、测试转红；去掉 id 冲突检查 → 同名内置插件被用户目录的版本覆盖、测试转红。
+- **技能导入顺手改成共用实现**：`tools/skills/runtime.ts` 里那套 fflate 处理被 `archive.ts` 取代（行为不变，只是不再各写一遍）。
+- 测试：`packages/plugin/test/plugin-install.test.ts`（18 项）、`plugin-archive.test.ts`（23 项，含一次性跑通「解压 → 校验 → rename → 登记」）、`apps/server/test/plugins-route.test.ts` 新增安装 4 / 上传 8 / 卸载 3 项。
+- 反向验证：去掉内置保护 → 内置目录真的被删、测试转红；去掉 id 冲突检查 → 同名内置插件被覆盖、测试转红；去掉 `normalizeEntryPath` 的 `..` 判断 → zip slip 测试转红。
 
 ---
 
