@@ -1,8 +1,8 @@
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import { loadSkills, loadSkillsFromDir } from "@miubot/context/skills";
-import { Unzip, UnzipInflate, UnzipPassThrough } from "fflate";
 import { Type } from "typebox";
+import { entriesUnderRoot, findArchiveRoot, readZip } from "../../archive.ts";
 import type { ToolDefinition } from "../../extensions/index.ts";
 
 const skillSchema = Type.Object({ name: Type.String({ description: "Skill name from the available skills list" }) });
@@ -57,66 +57,12 @@ async function installSkillFiles(agentDir: string, files: SkillFile[]): Promise<
 }
 
 function extractSkillZip(archive: Uint8Array): SkillFile[] {
-	if (archive.byteLength === 0 || archive.byteLength > 20_000_000) throw new Error("ZIP 文件为空或超过 20 MB");
-	const extracted = new Map<string, Uint8Array[]>();
-	let fileCount = 0;
-	let totalSize = 0;
-	let failure: Error | undefined;
-	const unzip = new Unzip((file) => {
-		fileCount++;
-		if (fileCount > 100) failure = new Error("ZIP 文件数量超过 100 个");
-		const name = file.name.replace(/\\/g, "/");
-		if (
-			name.startsWith("/") ||
-			/^[a-zA-Z]:/.test(name) ||
-			name.split("/").some((part) => part === ".." || part === ".")
-		)
-			failure = new Error("ZIP 包含无效路径");
-		if (!name.endsWith("/")) extracted.set(name, []);
-		file.ondata = (error, chunk) => {
-			if (error) {
-				failure = new Error("ZIP 解压失败");
-				return;
-			}
-			totalSize += chunk.byteLength;
-			if (totalSize > 10_000_000) {
-				failure = new Error("解压后的 ZIP 超过 10 MB");
-				return;
-			}
-			if (!name.endsWith("/")) extracted.get(name)?.push(chunk);
-		};
-		try {
-			file.start();
-		} catch {
-			failure = new Error("ZIP 使用了不支持的压缩格式");
-		}
-	});
-	unzip.register(UnzipInflate);
-	unzip.register(UnzipPassThrough);
-	try {
-		unzip.push(archive, true);
-	} catch {
-		failure ??= new Error("ZIP 文件损坏或压缩格式不受支持");
-	}
-	if (failure) throw failure;
-	if (fileCount === 0 || extracted.size === 0) throw new Error("ZIP 中没有文件");
-	const skillFiles = [...extracted.keys()].filter((name) => name === "SKILL.md" || name.endsWith("/SKILL.md"));
-	if (skillFiles.length !== 1)
-		throw new Error(skillFiles.length === 0 ? "ZIP 中没有 SKILL.md" : "ZIP 中包含多个 Skill，请每次导入一个技能");
-	const skillRoot = dirname(skillFiles[0]!).replace(/\\/g, "/");
-	return [...extracted.entries()]
-		.filter(([name]) => (skillRoot === "." ? !name.includes("/") : name.startsWith(`${skillRoot}/`)))
-		.map(([name, chunks]) => {
-			const relativePath = skillRoot === "." ? name : name.slice(skillRoot.length + 1);
-			const size = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-			const bytes = new Uint8Array(size);
-			let offset = 0;
-			for (const chunk of chunks) {
-				bytes.set(chunk, offset);
-				offset += chunk.byteLength;
-			}
-			return { relativePath, bytes };
-		});
+	// 技能包的限额比插件包更紧：一个技能就是「说明 + 少量参考文件」，不是程序。
+	const entries = readZip(archive, { maxArchiveBytes: 20_000_000, maxFiles: 100, maxTotalBytes: 10_000_000 });
+	const marker = findArchiveRoot(entries, "SKILL.md");
+	if (!marker) throw new Error("ZIP 中没有 SKILL.md");
+	if (marker.matches > 1) throw new Error("ZIP 中包含多个 Skill，请每次导入一个技能");
+	return entriesUnderRoot(entries, marker.root).map((entry) => ({ relativePath: entry.path, bytes: entry.bytes }));
 }
 
 export async function installSkillFromZip(agentDir: string, archive: Uint8Array): Promise<InstalledSkill> {

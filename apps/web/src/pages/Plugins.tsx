@@ -426,6 +426,44 @@ export function Plugins() {
     }
   };
 
+  const uploadZip = async (file: File) => {
+    // 先在浏览器侧挡一道：传完 20 MB 再被服务端拒掉，用户等的是白等。
+    if (file.size > 20_000_000) {
+      setNotice("ZIP 文件超过 20 MB");
+      return;
+    }
+    setBusy(":upload");
+    setNotice("");
+    setInstallIssues([]);
+    try {
+      const response = await fetch("/api/plugins/import", {
+        method: "POST",
+        // 直接把 File 当 body：服务端按原始字节读，不用解析 multipart。
+        headers: { "content-type": "application/zip" },
+        body: file,
+      });
+      const data = (await response.json()) as Snapshot & {
+        message?: string;
+        issues?: InstallIssue[];
+        installed?: string;
+        started?: boolean;
+      };
+      if (!response.ok) {
+        setInstallIssues(data.issues ?? []);
+        setNotice(data.message ?? "导入失败");
+        return;
+      }
+      setSnapshot(data);
+      setInstallOpen(false);
+      setInstallPath("");
+      setNotice(`已导入 ${data.installed}${data.started === false ? "（配置中禁用，未启动）" : ""}`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy("");
+    }
+  };
+
   const uninstall = async (id: string) => {
     setBusy(`${id}:uninstall`);
     setNotice("");
@@ -478,20 +516,53 @@ export function Plugins() {
         </div>
 
         {installOpen && (
-          <section className="sketch-card space-y-3 p-4">
+          <section
+            className="sketch-card space-y-3 p-4"
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              const file = event.dataTransfer.files[0];
+              if (file) void uploadZip(file);
+            }}
+          >
             <div>
-              <p className="text-[12.5px] text-[#cccccc]">插件目录的绝对路径</p>
+              <p className="text-[12.5px] text-[#cccccc]">上传 ZIP</p>
               <p className="mt-1 text-[11.5px] text-[#777777]">
-                目录里要有 <code className="font-mono">miubot.plugin.json</code> 与入口文件。
-                不支持压缩包，也不支持网页上传——把目录解压到本机，填路径即可。
+                把 <code className="font-mono">.zip</code> 拖到这个面板，或选择文件（≤ 20 MB）。
+                包内需要 <code className="font-mono">miubot.plugin.json</code>，可以直接放在根上，
+                也可以套一层目录。解压后按同一套规则校验，通过才登记。
               </p>
+              <label className="btn-pill-dark mt-2 inline-flex cursor-pointer">
+                <span>{busy === ":upload" ? "导入中…" : "选择 ZIP 文件"}</span>
+                <input
+                  type="file"
+                  accept=".zip,application/zip"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    // 清空 value，否则同一个文件选第二次不会触发 change。
+                    event.target.value = "";
+                    if (file) void uploadZip(file);
+                  }}
+                />
+              </label>
             </div>
-            <input
-              className="sketch-input w-full font-mono"
-              placeholder="D:\\plugins\\miubot.myplugin"
-              value={installPath}
-              onChange={(event) => setInstallPath(event.target.value)}
-            />
+
+            <div className="space-y-2 border-t border-[rgba(255,255,255,0.08)] pt-3">
+              <div>
+                <p className="text-[12.5px] text-[#cccccc]">或从本机目录安装</p>
+                <p className="mt-1 text-[11.5px] text-[#777777]">
+                  填已解压目录的绝对路径。本机开发时省掉打包上传这一步。
+                </p>
+              </div>
+              <input
+                className="sketch-input w-full font-mono"
+                placeholder="D:\\plugins\\miubot.myplugin"
+                value={installPath}
+                onChange={(event) => setInstallPath(event.target.value)}
+              />
+            </div>
+
             {installIssues.length > 0 && (
               <ul className="space-y-1 rounded-lg border border-[rgba(239,68,68,0.25)] bg-[rgba(239,68,68,0.08)] p-2.5">
                 {installIssues.map((issue) => (
@@ -501,6 +572,7 @@ export function Plugins() {
                 ))}
               </ul>
             )}
+
             <div className="flex justify-end gap-2">
               <button
                 className="btn-pill-dark"
@@ -513,7 +585,7 @@ export function Plugins() {
                 取消
               </button>
               <button className="btn-primary-white" disabled={busy !== ""} onClick={() => void install()}>
-                {busy === ":install" ? "安装中…" : "安装"}
+                {busy === ":install" ? "安装中…" : "按路径安装"}
               </button>
             </div>
           </section>

@@ -1,4 +1,4 @@
-import { readdir, stat } from "node:fs/promises";
+import { readdir, rename, rm, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { createDeduplicator, type Deduplicator } from "@miubot/shared/platform/dedup";
 import type {
@@ -14,7 +14,6 @@ import {
 	configuredSecretKeys,
 	createPluginConfigAccess,
 	type PluginConfigSchema,
-	type PluginConfigValue,
 	type PluginConfigValues,
 	resolveConfigValues,
 	validateConfigValues,
@@ -25,7 +24,7 @@ import {
 	type PluginExtensionFactory,
 	type PluginExtensionRegistry,
 } from "./extensions.ts";
-import { copyPackage, deletePackage, type InstallIssue, inspectPackage } from "./install.ts";
+import { copyPackage, deletePackage, extractPackage, type InstallIssue, inspectPackage } from "./install.ts";
 import { createPluginLifecycle, type PluginLifecycle, type PluginLifecycleState } from "./lifecycle.ts";
 import { loadPluginEntry } from "./loader.ts";
 import { loadManifest, MANIFEST_FILE, type PluginManifest } from "./manifest.ts";
@@ -334,7 +333,11 @@ export function createPluginHost(deps: PluginHostDependencies) {
 			let directories: string[];
 			try {
 				const entriesInDir = await readdir(root, { withFileTypes: true });
-				directories = entriesInDir.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+				// 跳过隐藏目录：`.incoming-*` 是 ZIP 解压的临时目录，还带着 manifest，
+				// 被登记进去就会出现「manifest 合法但文件没写完」的坏条目。
+				directories = entriesInDir
+					.filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+					.map((entry) => entry.name);
 			} catch {
 				// 目录不存在是正常情况（例如还没放用户插件），继续扫下一个根。
 				continue;
@@ -689,25 +692,16 @@ export function createPluginHost(deps: PluginHostDependencies) {
 	}
 
 	/**
-	 * 安装一个本地插件包。
+	 * 目标 id 与目标路径是否可用。
 	 *
-	 * 校验（manifest、入口存在、无符号链接、体积上限）在 `inspectPackage` 里做，这里只负责
-	 * 「装到哪、会不会撞车」。**装完不启动**：起不起来取决于配置里的白名单与 `disabled`，
-	 * 那是管理面的策略，由调用方在同一次请求里决定——宿主自己启动会造出「配置里禁用、
-	 * 却跑着的实例」，下次重启就消失。
-	 *
-	 * 同样**不覆盖已存在的插件**：升级要先卸载，否则一次手滑就把在用的插件换成半成品。
+	 * 目录安装与 ZIP 导入必须用同一套判断：两边各写一次，迟早出现「目录装得上、上传装不上」。
 	 */
-	async function install(
-		sourceDir: string,
-	): Promise<{ ok: true; status: PluginStatus } | { ok: false; issues: InstallIssue[] }> {
+	async function reserveTarget(
+		id: string,
+	): Promise<{ ok: true; target: string } | { ok: false; issues: InstallIssue[] }> {
 		if (!deps.installDir) {
 			return { ok: false, issues: [{ field: "installDir", message: "宿主未配置可写插件目录，无法安装" }] };
 		}
-		const inspected = await inspectPackage(sourceDir);
-		if (!inspected.ok) return inspected;
-
-		const { id } = inspected.manifest;
 		const existing = entries.get(id);
 		if (existing) {
 			// 内置同名插件也走这里：装上去了也会被 discover 的「首个目录优先」压住，
@@ -719,9 +713,44 @@ export function createPluginHost(deps: PluginHostDependencies) {
 		if (await pathExists(target)) {
 			return { ok: false, issues: [{ field: "id", message: `目标目录已存在：${target}` }] };
 		}
+		return { ok: true, target };
+	}
+
+	/** 装完登记并回读状态；两条安装入口共用。 */
+	async function finishInstall(
+		id: string,
+		origin: string,
+	): Promise<{ ok: true; status: PluginStatus } | { ok: false; issues: InstallIssue[] }> {
+		await discover();
+		const status = get(id);
+		if (!status) {
+			return { ok: false, issues: [{ field: "$", message: "已写入但未能登记，请重新扫描" }] };
+		}
+		deps.logger.info(`插件已安装：${id}（${origin}）`);
+		return { ok: true, status };
+	}
+
+	/**
+	 * 安装一个本地目录插件包。
+	 *
+	 * 校验（manifest、入口存在、无符号链接、体积上限）在 `inspectPackage` 里做，这里只负责
+	 * 「装到哪、会不会撞车」。**装完不启动**：起不起来取决于配置里的白名单与 `disabled`，
+	 * 那是管理面的策略，由调用方在同一次请求里决定——宿主自己启动会造出「配置里禁用、
+	 * 却跑着的实例」，下次重启就消失。
+	 *
+	 * 同样**不覆盖已存在的插件**：升级要先卸载，否则一次手滑就把在用的插件换成半成品。
+	 */
+	async function install(
+		sourceDir: string,
+	): Promise<{ ok: true; status: PluginStatus } | { ok: false; issues: InstallIssue[] }> {
+		const inspected = await inspectPackage(sourceDir);
+		if (!inspected.ok) return inspected;
+
+		const reserved = await reserveTarget(inspected.manifest.id);
+		if (!reserved.ok) return reserved;
 
 		try {
-			await copyPackage(sourceDir, target);
+			await copyPackage(sourceDir, reserved.target);
 		} catch (error) {
 			return {
 				ok: false,
@@ -729,13 +758,44 @@ export function createPluginHost(deps: PluginHostDependencies) {
 			};
 		}
 
-		await discover();
-		const status = get(id);
-		if (!status) {
-			return { ok: false, issues: [{ field: "$", message: "复制完成但未能登记，请重新扫描" }] };
+		return finishInstall(inspected.manifest.id, `目录 ${sourceDir}`);
+	}
+
+	/**
+	 * 从 ZIP 归档导入插件包。
+	 *
+	 * 解压到安装目录下的隐藏临时目录 → 过与目录安装**完全相同的** `inspectPackage` 校验 →
+	 * 原子 `rename` 到目标位置。上传不等于可信：工作台能上传，攻击面就只在「谁能调管理 API」，
+	 * 所以校验强度必须和手工放目录一样，不能因为是「我们自己解压的」就放松。
+	 */
+	async function importArchive(
+		archive: Uint8Array,
+	): Promise<{ ok: true; status: PluginStatus } | { ok: false; issues: InstallIssue[] }> {
+		if (!deps.installDir) {
+			return { ok: false, issues: [{ field: "installDir", message: "宿主未配置可写插件目录，无法安装" }] };
 		}
-		deps.logger.info(`插件已安装：${id}（来自 ${sourceDir}）`);
-		return { ok: true, status };
+		const extracted = await extractPackage(archive, resolve(deps.installDir));
+		if (!extracted.ok) return extracted;
+
+		try {
+			const inspected = await inspectPackage(extracted.directory);
+			if (!inspected.ok) return inspected;
+			const reserved = await reserveTarget(inspected.manifest.id);
+			if (!reserved.ok) return reserved;
+			try {
+				// 同分区 rename 是原子的，不会留下「复制了一半」的插件目录。
+				await rename(extracted.directory, reserved.target);
+			} catch (error) {
+				return {
+					ok: false,
+					issues: [{ field: "$", message: `写入失败：${error instanceof Error ? error.message : String(error)}` }],
+				};
+			}
+			return await finishInstall(inspected.manifest.id, `ZIP ${archive.byteLength} 字节`);
+		} finally {
+			// 已经 rename 走的话这里是空操作；校验失败时负责清掉临时目录。
+			await rm(extracted.directory, { recursive: true, force: true });
+		}
 	}
 
 	/**
@@ -810,6 +870,7 @@ export function createPluginHost(deps: PluginHostDependencies) {
 			save: saveConfig,
 		},
 		install,
+		importArchive,
 		uninstall,
 		/**
 		 * 是否存在订阅了该事件类型的启用插件。

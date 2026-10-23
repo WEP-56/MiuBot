@@ -69,6 +69,10 @@ export type HttpContext = {
 		directories: string[];
 		/** 从本地目录安装插件包。校验与复制都在宿主侧完成。 */
 		install(sourceDir: string): Promise<{ ok: true; status: PluginStatus } | { ok: false; issues: InstallIssue[] }>;
+		/** 从 ZIP 归档导入：解压到临时目录、按同一套规则校验、原子落位。 */
+		importArchive(
+			archive: Uint8Array,
+		): Promise<{ ok: true; status: PluginStatus } | { ok: false; issues: InstallIssue[] }>;
 		/** 卸载插件目录；数据与配置默认保留，要显式要求才删。 */
 		uninstall(
 			id: string,

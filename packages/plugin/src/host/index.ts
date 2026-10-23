@@ -52,6 +52,7 @@ export {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_FILES,
 	deletePackage,
+	extractPackage,
 	type InstallIssue,
 	inspectPackage,
 	type PackageInspection,

@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { PluginStatus } from "@miubot/plugin/host/index";
 import type { PluginSettings } from "../../runtime.ts";
 import type { HttpContext } from "../context.ts";
-import { body, json } from "../response.ts";
+import { binaryBody, body, headerValue, json } from "../response.ts";
 
 /**
  * `/api/plugins`：插件清单、启停与重载。
@@ -30,6 +30,24 @@ function snapshot(ctx: HttpContext) {
 	};
 }
 
+/**
+ * 装完之后的统一收尾：按配置决定起不起来，然后把最新清单回给前端。
+ *
+ * 宿主不读配置（`install` / `importArchive` 只负责写文件），所以「允不允许运行」这个
+ * 判断只在这里做一次，两条安装入口共用。否则会出现「目录装得上但被启动、上传装得上
+ * 但没启动」这类只在某条路径上出现的差异。
+ */
+async function respondInstalled(ctx: HttpContext, res: ServerResponse, id: string): Promise<void> {
+	const status = ctx.plugins.get(id);
+	const allowed = status ? isAllowedByConfig(ctx.config.get().plugins, status) : false;
+	if (allowed) {
+		await ctx.plugins.start(id);
+		// 新插件的工具要进已有会话，否则要等会话自然过期才生效。
+		ctx.agentHost.rebuildAgentSessions();
+	}
+	json(res, 200, { ok: true, installed: id, started: allowed, ...snapshot(ctx) });
+}
+
 export async function handlePluginRoutes(
 	ctx: HttpContext,
 	req: IncomingMessage,
@@ -50,8 +68,8 @@ export async function handlePluginRoutes(
 	/**
 	 * 从本地目录安装插件包。
 	 *
-	 * 只接受磁盘上已解压的目录（不做网页上传 / zip / 远程下载）：管理员就在这台机器上，
-	 * 而解压需要额外依赖。全部校验在宿主侧完成，这里只翻译结果。
+	 * 只接受磁盘上已解压的目录：本机开发时最方便——不用先打包再上传。
+	 * 全部校验在宿主侧完成，这里只翻译结果。
 	 */
 	if (url.pathname === "/api/plugins/install" && req.method === "POST") {
 		const payload = await body(req);
@@ -65,13 +83,31 @@ export async function handlePluginRoutes(
 			json(res, 400, { ok: false, message: "插件包未通过校验", issues: installed.issues });
 			return true;
 		}
-		// 装完由这里决定起不起来：宿主不读配置，配置策略只活在管理面。
-		const settings = ctx.config.get().plugins;
-		const allowed = isAllowedByConfig(settings, installed.status);
-		if (allowed) await ctx.plugins.start(installed.status.id);
-		// 新插件的工具要进已有会话，否则要等会话自然过期才生效。
-		if (allowed) ctx.agentHost.rebuildAgentSessions();
-		json(res, 200, { ok: true, installed: installed.status.id, started: allowed, ...snapshot(ctx) });
+		await respondInstalled(ctx, res, installed.status.id);
+		return true;
+	}
+
+	/**
+	 * 从 ZIP 上传导入插件包。
+	 *
+	 * 与 `/api/skills/import` 同一套传输方式：`content-type: application/zip` + 原始字节，
+	 * 不走 multipart——前端直接把 `File` 当 body 发，省掉一整套边界解析。
+	 */
+	if (url.pathname === "/api/plugins/import" && req.method === "POST") {
+		const contentType = headerValue(req.headers["content-type"])?.toLowerCase() ?? "";
+		// Windows 上浏览器可能报 `application/x-zip-compressed`，只认 "zip" 这个子串。
+		if (!contentType.includes("zip")) {
+			json(res, 415, { ok: false, message: "请上传 ZIP 文件（content-type: application/zip）" });
+			return true;
+		}
+		// 上限与 `readZip` 的归档上限一致：先挡住请求体，再谈解压后的体积。
+		const archive = await binaryBody(req, 20_000_000);
+		const imported = await ctx.plugins.importArchive(archive);
+		if (!imported.ok) {
+			json(res, 400, { ok: false, message: "插件包未通过校验", issues: imported.issues });
+			return true;
+		}
+		await respondInstalled(ctx, res, imported.status.id);
 		return true;
 	}
 

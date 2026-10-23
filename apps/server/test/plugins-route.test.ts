@@ -1,10 +1,11 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createPluginHost, type PluginHost } from "@miubot/plugin/host/index";
 import { createFilePluginConfig } from "@miubot/plugin/host/config";
 import { createFileStorage } from "@miubot/plugin/host/storage";
+import { strToU8, zipSync, type Zippable } from "fflate";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDefaultConfig, type AppConfig } from "../src/runtime.ts";
 import type { HttpContext } from "../src/http/context.ts";
@@ -34,6 +35,7 @@ async function harness(): Promise<{
 	deleteAssets: ReturnType<typeof vi.fn>;
 	host: PluginHost;
 	call: (method: string, path: string, payload?: unknown) => Promise<Call>;
+	upload: (path: string, bytes: Uint8Array, contentType?: string) => Promise<Call>;
 }> {
 	const root = await mkdtemp(join(tmpdir(), "miubot-plugins-api-"));
 	roots.push(root);
@@ -76,10 +78,30 @@ async function harness(): Promise<{
 			reload: host.reload,
 			config: { inspect: host.config.inspect, save: host.config.save },
 			install: host.install,
+			importArchive: host.importArchive,
 			uninstall: host.uninstall,
 			directories: [pluginsDir],
 		},
 	} as unknown as HttpContext;
+
+	/** 统一的响应捕获；JSON 调用与二进制上传共用。 */
+	async function invoke(req: IncomingMessage, url: URL): Promise<Call> {
+		let status = 0;
+		let responseBody = "";
+		const res = {
+			writeHead: (code: number) => {
+				status = code;
+				return res;
+			},
+			setHeader: () => res,
+			end: (chunk?: string) => {
+				responseBody = chunk ?? "";
+			},
+		} as unknown as ServerResponse;
+		const handled = await handlePluginRoutes(ctx, req, res, url);
+		if (!handled) throw new Error(`路由未处理：${req.method} ${url.pathname}`);
+		return { status, body: responseBody ? (JSON.parse(responseBody) as Record<string, unknown>) : {} };
+	}
 
 	return {
 		ctx,
@@ -101,21 +123,19 @@ async function harness(): Promise<{
 					if (requestBody !== undefined) yield Buffer.from(JSON.stringify(requestBody));
 				},
 			} as unknown as IncomingMessage;
-			let status = 0;
-			let responseBody = "";
-			const res = {
-				writeHead: (code: number) => {
-					status = code;
-					return res;
+			return invoke(req, url);
+		},
+		upload: async (path, bytes, contentType = "application/zip") => {
+			const url = new URL(path, "http://127.0.0.1");
+			const req = {
+				method: "POST",
+				url: path,
+				headers: { "content-type": contentType },
+				async *[Symbol.asyncIterator]() {
+					yield Buffer.from(bytes);
 				},
-				setHeader: () => res,
-				end: (chunk?: string) => {
-					responseBody = chunk ?? "";
-				},
-			} as unknown as ServerResponse;
-			const handled = await handlePluginRoutes(ctx, req, res, url);
-			if (!handled) throw new Error(`路由未处理：${method} ${path}`);
-			return { status, body: responseBody ? (JSON.parse(responseBody) as Record<string, unknown>) : {} };
+			} as unknown as IncomingMessage;
+			return invoke(req, url);
 		},
 	};
 }
@@ -165,6 +185,29 @@ type PluginRow = {
 	extensions: string[];
 	error?: string;
 };
+
+/**
+ * 现造一个插件 ZIP，省掉往仓库里塞二进制夹具。
+ *
+ * `prefix` 模拟「整个目录被打包」的常见形态——macOS 的「压缩」和资源管理器都会
+ * 多包一层目录，解压侧必须自己找到 manifest 所在的那一层。
+ */
+function makePluginZip(id: string, prefix = ""): Uint8Array {
+	const tree: Zippable = {
+		[`${prefix}miubot.plugin.json`]: strToU8(
+			JSON.stringify({
+				schemaVersion: 1,
+				id,
+				name: `插件 ${id}`,
+				version: "0.1.0",
+				entry: "./index.ts",
+				permissions: ["event:*"],
+			}),
+		),
+		[`${prefix}index.ts`]: strToU8(`export default { id: ${JSON.stringify(id)}, setup() {} };`),
+	};
+	return zipSync(tree);
+}
 
 function rows(response: Call): PluginRow[] {
 	return response.body.plugins as PluginRow[];
@@ -467,7 +510,8 @@ describe("PUT /api/plugins/:id/config", () => {
 
 		const response = await h.call("PUT", "/api/plugins/demo.plain/config", { values: { a: 1 } });
 		expect(response.status).toBe(400);
-		expect(String(response.body.message)).toContain("config");	});
+		expect(String(response.body.message)).toContain("config");
+	});
 });
 
 
@@ -519,6 +563,88 @@ describe("POST /api/plugins/install", () => {
 		const missing = await h.call("POST", "/api/plugins/install", { path: join(h.packagesDir, "nope") });
 		expect(missing.status).toBe(400);
 		expect(missing.body.issues).toContainEqual(expect.objectContaining({ field: "path" }));
+	});
+});
+
+describe("POST /api/plugins/import", () => {
+	it("上传 ZIP 后装上并启动，多包一层目录也能认出来", async () => {
+		const h = await harness();
+
+		// 前端把 `File` 当 body 直接发，所以这里也给原始字节。
+		const response = await h.upload("/api/plugins/import", makePluginZip("demo.uploaded", "demo.uploaded/"));
+		expect(response.status).toBe(200);
+		expect(response.body.installed).toBe("demo.uploaded");
+		expect(response.body.started).toBe(true);
+		expect(row(response, "demo.uploaded")).toMatchObject({ state: "active", removable: true, hasConfig: false });
+		// 上传路径同样要把新插件的工具送进已有会话。
+		expect(h.rebuilds()).toBeGreaterThan(0);
+	});
+
+	it("落位后的目录可直接再次扫描，不依赖内存里的临时状态", async () => {
+		const h = await harness();
+		await h.upload("/api/plugins/import", makePluginZip("demo.uploaded"));
+
+		// 重新 discover 相当于「重启服务」：临时目录必须已经改名成正式目录。
+		await h.host.discover();
+		expect(h.host.get("demo.uploaded")).toMatchObject({ source: "plugin", directory: join(h.pluginsDir, "demo.uploaded") });
+	});
+
+	it("配置里禁用的 id 导入后不启动", async () => {
+		const h = await harness();
+		h.config.plugins.disabled = ["demo.muted"];
+
+		const response = await h.upload("/api/plugins/import", makePluginZip("demo.muted"));
+		expect(response.status).toBe(200);
+		expect(response.body.started).toBe(false);
+		expect(row(response, "demo.muted")).toMatchObject({ state: "inactive", enabled: false });
+	});
+
+	it("非 ZIP 的 content-type 直接拒绝，不进入解压", async () => {
+		const h = await harness();
+		const response = await h.upload("/api/plugins/import", makePluginZip("demo.x"), "application/octet-stream");
+		expect(response.status).toBe(415);
+		expect(String(response.body.message)).toContain("ZIP");
+	});
+
+	it("Windows 上的 application/x-zip-compressed 也放行", async () => {
+		const h = await harness();
+		const response = await h.upload(
+			"/api/plugins/import",
+			makePluginZip("demo.win"),
+			"application/x-zip-compressed",
+		);
+		expect(response.status).toBe(200);
+		expect(response.body.installed).toBe("demo.win");
+	});
+
+	it("不是 ZIP 的字节返回逐项问题，不留下临时目录", async () => {
+		const h = await harness();
+		const response = await h.upload("/api/plugins/import", new Uint8Array([1, 2, 3, 4]));
+		expect(response.status).toBe(400);
+		expect(response.body.issues).toContainEqual(expect.objectContaining({ field: "zip" }));
+		// `.incoming-*` 是隐藏目录，扫描会跳过；这里断言它确实没留下东西。
+		const leftovers = (await readdir(h.pluginsDir)).filter((name) => name.startsWith("."));
+		expect(leftovers).toEqual([]);
+	});
+
+	it("ZIP 里没有 manifest 时返回 400", async () => {
+		const h = await harness();
+		const archive = zipSync({ "index.ts": strToU8("export default { id: 'x', setup() {} };") });
+		const response = await h.upload("/api/plugins/import", archive);
+		expect(response.status).toBe(400);
+		expect(response.body.issues).toContainEqual(expect.objectContaining({ field: "zip" }));
+	});
+
+	it("重复 id 返回逐项问题，且不覆盖原有目录", async () => {
+		const h = await harness();
+		await h.upload("/api/plugins/import", makePluginZip("demo.dup"));
+
+		const again = await h.upload("/api/plugins/import", makePluginZip("demo.dup"));
+		expect(again.status).toBe(400);
+		expect(again.body.issues).toContainEqual(expect.objectContaining({ field: "id" }));
+		// 原插件仍在正常运行，没有被这次重复写入弄坏。
+		const list = await h.call("GET", "/api/plugins");
+		expect(row(list, "demo.dup")).toMatchObject({ state: "active" });
 	});
 });
 

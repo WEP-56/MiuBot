@@ -202,6 +202,7 @@ const httpContext: HttpContext = {
 		reload: pluginHost.reload,
 		config: { inspect: pluginHost.config.inspect, save: pluginHost.config.save },
 		install: pluginHost.install,
+		importArchive: pluginHost.importArchive,
 		uninstall: pluginHost.uninstall,
 		directories: [builtinPluginsDir, pluginsDir],
 	},

@@ -1,13 +1,15 @@
-import { cp, mkdir, readdir, rm, stat } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve } from "node:path";
-import { loadManifest, type PluginManifest } from "./manifest.ts";
+import { randomUUID } from "node:crypto";
+import { cp, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { entriesUnderRoot, findArchiveRoot, readZip } from "../archive.ts";
+import { loadManifest, MANIFEST_FILE, type PluginManifest } from "./manifest.ts";
 
 /**
- * 本地插件包的安装与卸载。
+ * 插件包的安装与卸载。
  *
- * 范围是**本地可信包**：管理员给出一个已经解压在磁盘上的插件目录，宿主校验后复制到
- * 用户插件目录。不做网页上传、不做远程下载、不支持 zip——Node 没有内置解压，为这一条
- * 引一个依赖不值得，而管理员本来就在这台机器上。
+ * 两条入口：本地目录（管理员已解压到磁盘）与 ZIP 上传（工作台选文件）。两者最终都落到
+ * `<installDir>/<manifest id>`，共用同一套 `inspectPackage` 校验——**上传不等于可信**，
+ * 解压出来的东西和手工放的目录要过同样的检查。
  *
  * 这一层只碰文件系统和 manifest；启停、配置清理、会话重建由宿主与路由编排。
  */
@@ -169,4 +171,58 @@ export async function copyPackage(sourceDir: string, targetDir: string): Promise
 /** 删除插件目录。整个目录一起删——插件代码脱离 manifest 没有保留价值。 */
 export async function deletePackage(directory: string): Promise<void> {
 	await rm(resolve(directory), { recursive: true, force: true });
+}
+
+/**
+ * 把 ZIP 解到 `targetParent` 下的临时目录，返回该目录。
+ *
+ * 临时目录用 `.incoming-` 前缀放在安装目录**内部**：宿主的 `discover()` 跳过隐藏目录，
+ * 解压途中不会被登记成一个「manifest 合法但文件还没写完」的插件；同一分区也保证后续
+ * `rename` 是原子的，不会出现「复制一半」的插件。
+ *
+ * 这里不判断 id 冲突、不做启停——那些需要宿主的登记表。
+ */
+export async function extractPackage(
+	archive: Uint8Array,
+	targetParent: string,
+): Promise<{ ok: true; directory: string } | { ok: false; issues: InstallIssue[] }> {
+	let entries: Awaited<ReturnType<typeof readZip>>;
+	try {
+		// 插件包比技能包宽松：可能带图标、字体这类静态资源。
+		entries = readZip(archive, { maxFiles: DEFAULT_MAX_FILES, maxTotalBytes: DEFAULT_MAX_BYTES });
+	} catch (error) {
+		return { ok: false, issues: [{ field: "zip", message: error instanceof Error ? error.message : String(error) }] };
+	}
+
+	const marker = findArchiveRoot(entries, MANIFEST_FILE);
+	if (!marker) {
+		return { ok: false, issues: [{ field: "zip", message: `ZIP 中没有 ${MANIFEST_FILE}` }] };
+	}
+	if (marker.matches > 1) {
+		return {
+			ok: false,
+			issues: [{ field: "zip", message: `ZIP 中包含多个 ${MANIFEST_FILE}，请每次只导入一个插件` }],
+		};
+	}
+
+	const directory = join(resolve(targetParent), `.incoming-${randomUUID()}`);
+	try {
+		for (const file of entriesUnderRoot(entries, marker.root)) {
+			const destination = join(directory, file.path);
+			// `readZip` 已经挡掉 `..` 与绝对路径，这里再确认落点确实在临时目录内：
+			// 解压是外来字节写本地文件，多一道判断比事后排查便宜。
+			const rel = relative(directory, destination);
+			if (!rel || rel.startsWith("..") || isAbsolute(rel)) {
+				throw new Error(`ZIP 包含无效路径：${file.path}`);
+			}
+			await mkdir(dirname(destination), { recursive: true });
+			// `wx` 拒绝覆盖：重名条目在 `readZip` 已拦，这里防的是大小写不敏感文件系统上的撞名。
+			await writeFile(destination, file.bytes, { flag: "wx" });
+		}
+	} catch (error) {
+		await rm(directory, { recursive: true, force: true });
+		return { ok: false, issues: [{ field: "zip", message: error instanceof Error ? error.message : String(error) }] };
+	}
+
+	return { ok: true, directory };
 }
