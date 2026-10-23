@@ -630,7 +630,13 @@ Agent 主动发言是 Agent 行为策略，插件定时任务是通用调度机�
 - [x] Tool 重名检测、作用域过滤与调用前二次权限检查（注册期查重 + 每次 `execute` 复核存活/代次 + `bots` 作用域）。
 - [x] 启停同步现有 Session 的有效 Tool 集合：管理 API 变更后 `rebuildAgentSessions()`。
       在途调用策略为「执行入口复核」——停用后新调用立即失败，已取消的调用靠 `signal` 与超时收敛。
-- [ ] 可选的 Pi Extension factories 桥接至 `DefaultResourceLoader`。
+- [x] 可选的 Pi Extension factories 桥接至 `DefaultResourceLoader`（2026-10-22）。
+      `packages/plugin/src/host/extensions.ts` 产出 `{ name, factory }[]`，`agent-host.ts` 把它排在
+      服务端自己的 `miubot-qq-scene` **之前**铺进 `extensionFactories`（保证 `appendSystemPrompt`
+      拼接顺序稳定）。扩展路径为 `plugin:{pluginId}/{name}`，装载失败由 `resourceLoader.getExtensions().errors`
+      读出并写运行日志——加载器只收集不抛出，不读就等于静默失效。
+      桥接的是**钩子**，不桥接工具：插件扩展拿到的 `pi.registerTool()` 被守卫挡住，必须走
+      `ctx.tools.register()`，否则重名检查、工作台展示与启停联动都会漏掉它。
 - [x] 内置 Tools **不强制迁移成插件包**，先验证新旧工具共存。
 
 ### 阶段 C：工作台管理闭环（P0→P1）

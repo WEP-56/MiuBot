@@ -5,6 +5,7 @@ import type {
 	PlatformEventType,
 } from "@miubot/shared/platform/events";
 import type { MessageTarget, PluginMessageSender, PluginTextOptions } from "@miubot/shared/platform/outbound";
+import type { PluginExtensionFactory } from "./extensions.ts";
 import type { PluginLifecycle } from "./lifecycle.ts";
 import { PluginInactiveError } from "./lifecycle.ts";
 import type { PluginPermission } from "./manifest.ts";
@@ -35,6 +36,8 @@ export type PluginContext = {
 	readonly storage: PluginStorage;
 	/** 注册 Agent Tool；需要 manifest 声明 `tool:register`。 */
 	readonly tools: PluginToolRegistrar;
+	/** 注册对话钩子（Pi Extension）；需要 manifest 声明 `extension:register`。 */
+	readonly extensions: PluginExtensionRegistrar;
 	/** 登记清理函数，停用时按后进先出顺序执行。 */
 	onDispose(disposer: () => void | Promise<void>): void;
 	/** 插件被停用时触发。是**本实例**的信号，不会被后续重启覆盖。 */
@@ -48,6 +51,11 @@ export type PluginContext = {
 /** 插件工具注册面。返回的函数用于提前撤销某一次注册。 */
 export type PluginToolRegistrar = {
 	register(definition: PluginToolDefinition): () => void;
+};
+
+/** 插件扩展注册面。`name` 在插件内唯一，最终路径是 `plugin:{pluginId}/{name}`。 */
+export type PluginExtensionRegistrar = {
+	register(extension: { name: string; factory: PluginExtensionFactory }): () => void;
 };
 
 /** 插件专用的事件订阅面：在只读契约之上增加「是否接收自身来源」的开关。 */
@@ -94,6 +102,13 @@ export type PluginContextDependencies = {
 	logger: PluginLogger;
 	/** 工具注册入口；由宿主负责命名冲突与作用域，上下文只补权限与代次校验。 */
 	registerTool: (pluginId: string, generation: number, definition: PluginToolDefinition) => () => void;
+	/** 扩展注册入口；同上。 */
+	registerExtension: (
+		pluginId: string,
+		generation: number,
+		name: string,
+		factory: PluginExtensionFactory,
+	) => () => void;
 };
 
 /** 订阅权限覆盖：`event:*` 授权全部事件类型。 */
@@ -233,6 +248,20 @@ export function createPluginContext(deps: PluginContextDependencies): PluginCont
 				// 宿主负责命名冲突与 Bot 作用域；这里只补「插件是否还有权注册」。
 				const unregister = deps.registerTool(deps.manifestId, generation, definition);
 				// 登记为清理函数：停用时自动撤销，插件自己也可以提前调用返回值撤销。
+				const untrack = lifecycle.track(unregister);
+				return () => {
+					untrack();
+					unregister();
+				};
+			},
+		},
+		extensions: {
+			register(extension) {
+				guard(`注册扩展 ${extension.name}`);
+				if (!permissions.has("extension:register")) {
+					throw new PluginInactiveError(deps.manifestId, "未声明权限 extension:register");
+				}
+				const unregister = deps.registerExtension(deps.manifestId, generation, extension.name, extension.factory);
 				const untrack = lifecycle.track(unregister);
 				return () => {
 					untrack();

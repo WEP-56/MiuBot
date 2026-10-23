@@ -140,6 +140,7 @@ type PluginRow = {
 	enabled: boolean;
 	source: string;
 	tools: string[];
+	extensions: string[];
 	error?: string;
 };
 
@@ -187,6 +188,19 @@ describe("GET /api/plugins", () => {
 
 		const response = await h.call("GET", "/api/plugins");
 		expect(row(response, "demo.tools")?.tools).toEqual(["demo_ping"]);
+	});
+
+	it("列出插件注册的对话钩子", async () => {
+		const h = await harness();
+		await writePlugin(h.pluginsDir, "demo.hooks", { permissions: ["extension:register"] }, `
+			ctx.extensions.register({ name: "hooks", factory(pi) { pi.on("agent_start", () => {}); } });
+		`);
+		await h.host.discover();
+		await h.host.start("demo.hooks");
+
+		const response = await h.call("GET", "/api/plugins");
+		// 工作台按这个名字展示，路径前缀能直接看出归属插件。
+		expect(row(response, "demo.hooks")?.extensions).toEqual(["hooks"]);
 	});
 
 	it("重复扫描不会把已有插件标成重复", async () => {

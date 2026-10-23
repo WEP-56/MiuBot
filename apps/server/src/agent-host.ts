@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { ToolDefinition } from "@miubot/plugin/extensions/types";
+import type { InlineExtension, ToolDefinition } from "@miubot/plugin/extensions/types";
 import { createBuiltinTools, type McpRuntime } from "@miubot/plugin/tools/index";
 import { generateOpenAIImage } from "@miubot/provider";
 import type { AgentSession } from "@miubot/session/agent-session";
@@ -52,6 +52,11 @@ type PluginToolScope = {
 	namesFor(scope: { botId: string }): string[];
 };
 
+/** 插件贡献的对话钩子；形状与 `DefaultResourceLoader.extensionFactories` 一致。 */
+type PluginExtensionScope = {
+	factoriesFor(scope: { botId: string }): InlineExtension[];
+};
+
 type AgentHostDependencies = {
 	dataDir: string;
 	agentDir: string;
@@ -65,6 +70,9 @@ type AgentHostDependencies = {
 	stickerStore: StickerStore;
 	mcpRuntime: McpRuntime;
 	pluginTools: PluginToolScope;
+	pluginExtensions: PluginExtensionScope;
+	/** 运行日志；用于把扩展装载失败等原因暴露出来，而不是让它静默消失。 */
+	log?: (level: "INFO" | "WARN" | "ERROR", text: string) => void;
 };
 
 export function createAgentHost(deps: AgentHostDependencies) {
@@ -240,6 +248,9 @@ export function createAgentHost(deps: AgentHostDependencies) {
 			agentDir: deps.agentDir,
 			skillsOverride: (base) => ({ ...base, skills: config().tools.skillsEnabled ? base.skills : [] }),
 			extensionFactories: [
+				// 插件贡献的钩子排在前：服务端自己的场景扩展随后加载，保证 appendSystemPrompt
+				// 的拼接顺序稳定（场景 → 插件补充）。顺序变化会直接影响提示词内容。
+				...deps.pluginExtensions.factoriesFor({ botId: runtimeSession.botId }),
 				{
 					name: "miubot-qq-scene",
 					factory: (pi) => {
@@ -276,6 +287,10 @@ export function createAgentHost(deps: AgentHostDependencies) {
 			],
 		});
 		await resourceLoader.reload();
+		// 插件扩展工厂抛错只会被加载器记进 errors，不读出来就等于静默失效。
+		for (const failure of resourceLoader.getExtensions().errors) {
+			deps.log?.("WARN", `会话扩展加载失败（${failure.path}）：${failure.error}`);
+		}
 		const runtime = await getModelRuntime();
 		const created = await createAgentSession({
 			cwd: deps.dataDir,

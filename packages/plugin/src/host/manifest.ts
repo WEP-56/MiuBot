@@ -16,13 +16,16 @@ export type PluginPermission =
 	| "storage:read"
 	| "storage:write"
 	/** 允许注册 Agent Tool（`ctx.tools.register()`）。 */
-	| "tool:register";
+	| "tool:register"
+	/** 允许注册对话钩子（`ctx.extensions.register()`）。 */
+	| "extension:register";
 
 const KNOWN_PERMISSIONS = new Set<string>([
 	"message:send",
 	"storage:read",
 	"storage:write",
 	"tool:register",
+	"extension:register",
 	"event:*",
 	"event:message.received",
 	"event:message.sent",

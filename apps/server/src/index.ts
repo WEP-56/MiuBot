@@ -112,6 +112,9 @@ const agentHost = createAgentHost({
 	mcpRuntime,
 	// 按会话所属 Bot 过滤：manifest 里声明只服务某个 Bot 的插件，不能把工具暴露给别的 Bot。
 	pluginTools: pluginHost.tools,
+	// 同理，插件贡献的对话钩子也按 Bot 过滤，并且只在会话创建时取一次。
+	pluginExtensions: pluginHost.extensions,
+	log: (level, text) => log(level, text),
 });
 const stickerTagging = createStickerTagging({
 	getConfig: state.getConfig,

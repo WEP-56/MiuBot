@@ -36,7 +36,7 @@ packages/
 
 当前运行形态是单机 Node 服务：`apps/server` 提供 `127.0.0.1:8787` 的本机 API，并装配 QQ 官方 Bot；`apps/web` 默认运行在 `127.0.0.1:5173`，将 `/api` 代理到服务端。服务端当前把配置、会话和运行日志保存到 `apps/server/.miubot/`，该目录是本机运行数据，不是源码或测试夹具。
 
-基础闭环已经接通：QQ 官方 Bot（扫码或 AppID/AppSecret）、提供商/模型、人格、群/个人会话、Agent Loop、工具开关、调试台、运行日志和群聊智能插话。插件闭环（事件插件宿主 + 管理 API + 工作台插件页 + 插件注册 Agent Tool）也已接通，见 `packages/plugin/src/host/`。MCP 管理、长期记忆、表情包、定时任务、插件上传安装、完整 Trace、正式数据库持久化等能力以路线图为准，看到 Web 占位页时不要默认其后端已经实现。
+基础闭环已经接通：QQ 官方 Bot（扫码或 AppID/AppSecret）、提供商/模型、人格、群/个人会话、Agent Loop、工具开关、调试台、运行日志和群聊智能插话。插件闭环（事件插件宿主 + 管理 API + 工作台插件页 + 插件注册 Agent Tool + 插件注册对话钩子）也已接通，见 `packages/plugin/src/host/`。MCP 管理、长期记忆、表情包、定时任务、插件上传安装、完整 Trace、正式数据库持久化等能力以路线图为准，看到 Web 占位页时不要默认其后端已经实现。
 
 接手任务时先看 `git status --short`，再按任务进入对应入口文件；只有需要追踪跨层行为时，才扩展到相关 package 和架构文档。
 
@@ -47,6 +47,7 @@ packages/
 - MCP 协议客户端属于 `packages/mcp`；与 Pi Extension ToolDefinition 的桥接、连接生命周期及 Agent 工具注册属于 `packages/plugin/src/tools/mcp`。服务端只维护用户配置 API 和是否启用的宿主策略。
 - 平台 I/O、业务数据存储、后台任务与管理 API 不因被某个 Tool 使用就自动归入 `plugin`；它们由所属 package 实现，再由宿主注入 Tool。保持模型可调用入口和底层服务的边界清晰。
 - 扩展生命周期、Hook、Tool 注册与权限能力归 `packages/plugin`。Pi 扩展中的 TUI 能力不得直接作为 Miubot WebUI API；新增 WebUI 扩展点须定义宿主可控的 Web 契约和权限。
+- 插件侧只有两条注册入口：`ctx.tools.register()`（模型可调用工具）与 `ctx.extensions.register()`（对话钩子）。插件扩展拿到的 `pi.registerTool()` 被守卫挡住——不要让第二条工具注册路径出现。
 - 新增内置 Tool 时，同时更新 `packages/plugin/src/tools/index.ts` 导出和相应测试；服务端只负责装配与授权，不复制 Tool schema 或描述。
 
 ## 架构边界与功能归属

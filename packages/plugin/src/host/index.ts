@@ -4,11 +4,22 @@ export {
 	type PluginContext,
 	type PluginContextDependencies,
 	type PluginDefinition,
+	type PluginExtensionRegistrar,
 	type PluginLogger,
 	type PluginSetup,
 	type PluginStorage,
 	type PluginToolRegistrar,
 } from "./context.ts";
+export {
+	createPluginExtensionRegistry,
+	extensionPathOf,
+	type PluginExtensionEntry,
+	type PluginExtensionFactory,
+	type PluginExtensionRegistration,
+	type PluginExtensionRegistry,
+	type PluginExtensionRegistryDependencies,
+	validatePluginExtension,
+} from "./extensions.ts";
 export {
 	createPluginHost,
 	listPluginDirectories,

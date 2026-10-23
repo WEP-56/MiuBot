@@ -1,21 +1,22 @@
 # 交接文档：Plugin 模块（阶段 A / B / C 均已完成）
 
 > 用途：因会话上下文过长，在新会话继续开发时先读这份。
-> 最后更新：2026-10-22 22:20
+> 最后更新：2026-10-23 09:10
 
 ---
 
 ## 一、当前状态
 
-**阶段 A（事件型插件）、阶段 B（插件注册 Agent Tool）、阶段 C（管理 API + 工作台插件页）均已完成并推送。** 管理面安全与 `index.ts` 职责拆分也已就绪（2160 → 约 215 行）。
+**阶段 A（事件型插件）、阶段 B（插件注册 Agent Tool + Pi Extension 钩子）、阶段 C（管理 API + 工作台插件页）均已完成并推送。** 管理面安全与 `index.ts` 职责拆分也已就绪（2160 → 约 215 行）。
 
-验证门禁全绿：`npm run check` / `npm run lint` / `npm test`（**187 files / 1763 tests**）。
+验证门禁全绿：`npm run check` / `npm run lint` / `npm test`（**189 files / 1777 tests**）。
 
 最近七次提交：
 
 | commit | 内容 |
 |---|---|
-| 本次 | feat: 插件注册 Agent Tool 与会话注入（阶段 B） |
+| 本次 | feat: 插件 Pi Extension factories 桥接会话资源加载器（阶段 B 收尾） |
+| `972f8e9` | feat: 插件注册 Agent Tool 与会话注入（阶段 B） |
 | `d41ce5d` | feat: 插件管理 API 与工作台插件页（阶段 C） |
 | `86dc6af` | refactor(server): 拆分运行时状态、QQ 流水线与前置逻辑 |
 | `705c9d8` | refactor(server): 管理 API 路由从 index.ts 拆出 |
@@ -88,6 +89,8 @@
 | `loader.ts` | `.ts` 走 jiti；`.js`/`.mjs`/`.cjs` 走原生 `import()` |
 | `storage.ts` | 每插件一个 JSON 文件，串行化写入 |
 | `rate-limit.ts` | 出站滑动窗口限流 |
+| `tools.ts` | 插件工具注册表：校验、查重、存活判定、`ToolDefinition` 生成（含超时与取消） |
+| `extensions.ts` | 插件 Pi Extension 工厂注册表：命名、存活判定、`bots` 过滤、`pi` 守卫 |
 | `host.ts` | 发现 / 启停 / 重启 / 状态 / 去重 / 事件扇出 |
 | `index.ts` | barrel |
 
@@ -184,6 +187,25 @@
 
 **注意（原方案里的坑）**：如果改用扩展 `tool_call` handler 做授权，必须给每个 Session 无条件注册，否则「没有 handler = 默认放行」。本次没有走那条路——权限校验放在工具 `execute` 的统一入口，不依赖扩展是否存在。
 
+### 5. 阶段 B 收尾：Pi Extension factories 桥接（✅ 已完成）
+
+| 文件 | 职责 |
+|---|---|
+| `packages/plugin/src/host/extensions.ts` | 工厂注册表：命名校验、跨插件重名、存活/代次判定、`bots` 过滤、`pi` 守卫 |
+| `packages/plugin/src/host/context.ts` | `ctx.extensions.register()`（权限 `extension:register` + 代次校验 + 自动撤销） |
+| `apps/server/src/agent-host.ts` | 铺进 `DefaultResourceLoader.extensionFactories`，并读出 `errors[]` 写运行日志 |
+| `packages/plugin/src/host/host.ts` | `pluginHost.extensions`，`PluginStatus.extensions` 供工作台展示 |
+
+要点：
+
+- **只桥接钩子，不桥接工具**：插件扩展拿到的 `pi.registerTool()` 被守卫直接抛错，必须走 `ctx.tools.register()`。两套注册路径会让重名检查、工作台展示、启停联动各算一套，最后必然出现「UI 里看不到但模型能调」的工具。
+- **顺序稳定**：插件扩展排在服务端自己的 `miubot-qq-scene` **之前**，保证 `appendSystemPrompt` 的拼接顺序固定（场景 → 插件补充）。改顺序会直接改变提示词内容。
+- **失败不静默**：`DefaultResourceLoader` 把工厂异常收进 `errors[]` 而不外抛，`agent-host` 主动读出来写 `WARN`（路径形如 `<inline:plugin:test.broken/hooks>`）。不读就等于插件悄悄失效。
+- **扩展路径**：`plugin:{pluginId}/{name}`；`name` 为 2–32 位小写字母/数字/短横线，同插件内与跨插件都查重。
+- **作用域**：manifest `bots` 决定哪些 Bot 的会话装载该扩展；停用后 `removeOwner()` 清空，重建会话才生效（与工具同一条策略）。
+- 守卫每次装载重新包一层（`factory: (pi) => registration.factory(guard(pi))`），不缓存到登记对象上，避免改名后守卫文案串号。
+- 测试：`packages/plugin/test/plugin-extensions.test.ts`（9 项，注册表语义）+ `apps/server/test/plugin-extension-session.test.ts`（4 项，真实 `DefaultResourceLoader` + 真实 `createAgentSession`）。会话侧断言落在 `session.extensionRunner.hasHandlers(...)` 与直接 `emit()` 上——`agent_start` / `agent_end` 载荷极简，不需要真实模型请求就能验证「handler 进了运行器且派发时插件代码真的执行」。
+
 ---
 
 ## 六、已知遗留问题
@@ -193,6 +215,7 @@
 | P1 | `host.ts` | `hasActiveHandler()` 只判断有无订阅者，不能判断具体按钮是否被某插件认领（`cultivation:*` 这类） |
 | P2 | `plugin-bridge.ts` | `inboundReferences.take()` 只能消费一次；同一入站消息触发多个插件回复时，只有第一个拿到被动回复锚点 |
 | P2 | `storage.ts` | `readAll()` 吞掉解析异常返回 `{}`，损坏文件下次写入会被覆盖（数据丢失） |
+| P2 | `agent-host.ts` | 服务端从不调用 `session.bindExtensions()`，因此 `session_start` / `resources_discover` 这两个钩子对插件**永不触发**（`ExtensionRunner` 本身在会话构造时就建好了，`before_agent_start` / `tool_call` / `message_*` 等都正常）。Pi 那边这两个事件由 mode 层（interactive / print / rpc）绑定，Miubot 没有对应的 UI 层，是有意跳过的；若将来有插件需要它们，再补一次最小绑定 |
 | ✅ | `src/tool-names.ts` | 阶段 B 已收敛：`nativeToolNames` / `toolNames` / `auxiliaryToolNames` 单一来源，`present.ts`、`agent-host.ts`、`routes/tools.ts`、组合根的保留集都从这里取 |
 | P2 | `routes/plugins.ts` | 启停插件后无条件 `rebuildAgentSessions()`：若有会话正在流式回复会被中断。可改成 `anyAgentLoopRunning()` 为真时延后到空闲再重建 |
 

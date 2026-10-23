@@ -16,6 +16,8 @@ type Plugin = {
   disposers: number;
   /** 该插件向 Agent 注册的工具名；停用后为空。 */
   tools: string[];
+  /** 该插件贡献的对话钩子名（插件内短名，会话里挂成 `plugin:{id}/{name}`）；停用后为空。 */
+  extensions: string[];
   source: "plugin" | "invalid" | "duplicate";
 };
 
@@ -183,6 +185,17 @@ export function Plugins() {
                     className="rounded-md border border-[rgba(34,197,94,0.25)] bg-[rgba(34,197,94,0.08)] px-1.5 py-0.5 font-mono text-[11px] text-[#22c55e]"
                   >
                     {tool}
+                  </span>
+                ))}
+                {plugin.extensions?.length > 0 && (
+                  <span className="text-[11.5px] text-[#888888]">对话钩子</span>
+                )}
+                {(plugin.extensions ?? []).map((extension) => (
+                  <span
+                    key={extension}
+                    className="rounded-md border border-[rgba(56,189,248,0.25)] bg-[rgba(56,189,248,0.08)] px-1.5 py-0.5 font-mono text-[11px] text-[#38bdf8]"
+                  >
+                    {extension}
                   </span>
                 ))}
                 {plugin.permissions.length === 0 && (

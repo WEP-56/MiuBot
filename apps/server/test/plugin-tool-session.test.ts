@@ -115,6 +115,7 @@ beforeAll(async () => {
 		stickerStore: new StickerStore(dataDir),
 		mcpRuntime: new McpRuntime(),
 		pluginTools: pluginHost.tools,
+		pluginExtensions: pluginHost.extensions,
 	});
 });
 

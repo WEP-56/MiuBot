@@ -9,6 +9,11 @@ import type {
 } from "@miubot/shared/platform/events";
 import type { MessageTarget, PluginTextOptions } from "@miubot/shared/platform/outbound";
 import { createPluginContext, type PluginContext, type PluginLogger, type PluginStorage } from "./context.ts";
+import {
+	createPluginExtensionRegistry,
+	type PluginExtensionFactory,
+	type PluginExtensionRegistry,
+} from "./extensions.ts";
 import { createPluginLifecycle, type PluginLifecycle, type PluginLifecycleState } from "./lifecycle.ts";
 import { loadPluginEntry } from "./loader.ts";
 import { loadManifest, MANIFEST_FILE, type PluginManifest } from "./manifest.ts";
@@ -28,6 +33,8 @@ export type PluginStatus = {
 	disposers: number;
 	/** 该插件当前登记的工具名（停用后清空）。 */
 	tools: string[];
+	/** 该插件贡献的对话钩子名（停用后清空）。 */
+	extensions: string[];
 	/**
 	 * 条目来源。
 	 *
@@ -120,6 +127,14 @@ export function createPluginHost(deps: PluginHostDependencies) {
 	 */
 	const tools: PluginToolRegistry = createPluginToolRegistry({
 		reservedNames: () => deps.reservedToolNames?.() ?? [],
+		isLive: (pluginId, generation) => {
+			const entry = entries.get(pluginId);
+			return Boolean(entry && entry.lifecycle.state === "active" && entry.lifecycle.generation === generation);
+		},
+		logger: deps.logger,
+	});
+	/** 插件贡献的对话钩子；与工具注册表同源，存活判定都绑在 `entries` 上。 */
+	const extensions: PluginExtensionRegistry = createPluginExtensionRegistry({
 		isLive: (pluginId, generation) => {
 			const entry = entries.get(pluginId);
 			return Boolean(entry && entry.lifecycle.state === "active" && entry.lifecycle.generation === generation);
@@ -230,6 +245,7 @@ export function createPluginHost(deps: PluginHostDependencies) {
 			permissions: [...entry.manifest.permissions],
 			disposers: entry.lifecycle.disposerCount,
 			tools: tools.namesOf(entry.manifest.id),
+			extensions: extensions.namesOf(entry.manifest.id),
 			source: entry.source,
 		};
 	}
@@ -369,6 +385,8 @@ export function createPluginHost(deps: PluginHostDependencies) {
 			logger: deps.logger,
 			registerTool: (pluginId, generation, definition: PluginToolDefinition) =>
 				tools.register({ pluginId, generation, botIds, definition }),
+			registerExtension: (pluginId, generation, name, factory: PluginExtensionFactory) =>
+				extensions.register({ pluginId, generation, botIds, name, factory }),
 		});
 		entry.context = context;
 		// 插件自定义的 dispose 登记在最前，因此清理时最后执行——此时能力已撤销，
@@ -428,6 +446,7 @@ export function createPluginHost(deps: PluginHostDependencies) {
 		entry.context = undefined;
 		// 清理函数已逐个撤销，这里再兜一层：插件若在 dispose 里重新注册，也不会留到停用之后。
 		tools.removeOwner(id);
+		extensions.removeOwner(id);
 		for (const failure of failures) deps.logger.warn(`插件 ${id} 清理失败：${failure.error}`);
 		deps.logger.info(`插件已停用：${id}`);
 		// 没有剩余订阅者时断开总线，避免空转分发。
@@ -531,6 +550,11 @@ export function createPluginHost(deps: PluginHostDependencies) {
 			definitionsFor: tools.definitionsFor,
 			namesFor: tools.namesFor,
 			list: tools.list,
+		},
+		/** 当前存活扩展工厂，形状与 `DefaultResourceLoader.extensionFactories` 一致。 */
+		extensions: {
+			factoriesFor: extensions.factoriesFor,
+			list: extensions.list,
 		},
 		/**
 		 * 是否存在订阅了该事件类型的启用插件。
