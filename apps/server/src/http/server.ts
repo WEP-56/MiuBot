@@ -77,12 +77,28 @@ export function createRequestHandler(options: {
 		// 用固定 base 解析路径：`Host` 头已在上面校验，但仍不拿它拼 URL，避免解析期注入。
 		const url = new URL(req.url ?? "/", "http://127.0.0.1");
 		try {
-			if (await dispatch(context, req, res, url)) return;
+			if (await dispatch(context, req, res, url)) {
+				recordMutation(context, req, pathname, res.statusCode);
+				return;
+			}
 			json(res, 404, { ok: false, message: "Not found" });
 		} catch (error) {
 			respondError(context, res, error);
 		}
 	};
+}
+
+/**
+ * 变更类请求统一记一条审计。
+ *
+ * 埋在这里而不是每个路由里：路由各自埋点迟早会漏，而「谁在什么时候改了配置」恰恰是
+ * 出事之后唯一能回溯的东西。登录/登出/改密由 `auth` 自己记，这里跳过避免重复。
+ */
+function recordMutation(context: HttpContext, req: IncomingMessage, pathname: string, status: number): void {
+	const method = req.method ?? "GET";
+	if (method === "GET" || method === "HEAD") return;
+	if (pathname.startsWith("/api/auth/")) return;
+	context.audit.record({ action: "api.mutation", actor: "admin", detail: `${method} ${pathname} → ${status}` });
 }
 
 async function serveWorkbench(req: IncomingMessage, res: ServerResponse, assets: WebAssets): Promise<void> {

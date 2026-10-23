@@ -7,6 +7,7 @@ import type {
 } from "@miubot/plugin/host/index";
 import type { McpRuntime } from "@miubot/plugin/tools/index";
 import type { AgentHost, PeerConfig, RuntimeSession } from "../agent-host.ts";
+import type { AuditLog } from "../audit.ts";
 import type { AuthService } from "../auth.ts";
 import type { RuntimeLog } from "../logging.ts";
 import type { ProactiveDecision, ProactiveMetrics } from "../proactive.ts";
@@ -45,10 +46,17 @@ export type HttpContext = {
 	mcpRuntime: McpRuntime;
 	/** 管理面认证：登录、会话校验与撤销、口令修改。 */
 	auth: AuthService;
+	/** 审计日志：登录/登出/改密 + 所有变更类管理请求。 */
+	audit: AuditLog;
 	/** 当前版本号（`MIUBOT_VERSION` / `VERSION` 文件 / `package.json`）。 */
 	version: string;
 	/** 内置更新检查（只提示，不自动升级）。 */
 	updates: UpdateChecker;
+	/**
+	 * 入站白名单的环境变量覆盖（`MIUBOT_ALLOWED_PEERS`）。
+	 * 有值时工作台只读展示：以环境变量为准，避免「界面一套、实际一套」。
+	 */
+	envAllowedPeers?: string[];
 	/**
 	 * 插件宿主。启停由宿主负责，是否允许启停由配置里的 `plugins.enabled/disabled` 决定，
 	 * 两者都要写——只改运行时状态的话，下次启动又会被配置翻回去。

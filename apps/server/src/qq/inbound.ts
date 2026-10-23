@@ -3,6 +3,7 @@ import type { AgentHost, PeerConfig } from "../agent-host.ts";
 import type { AppState } from "../app-state.ts";
 import type { LogLevel } from "../logging.ts";
 import { downloadImage, prepareInboundMedia } from "../media.ts";
+import { peerKey } from "../peer-key.ts";
 import { normalizeMessageEvent } from "../platform/events.ts";
 import { acceptInboundMessage, describeQuoteContext } from "../platform/inbound.ts";
 import type { createInboundReferenceStore } from "../platform/plugin-bridge.ts";
@@ -30,6 +31,8 @@ export function createInboundHandler(deps: {
 	proactive: ProactiveRuntime;
 	inboundReferences: ReturnType<typeof createInboundReferenceStore>;
 	stickerStore: StickerStore;
+	/** 生效的入站白名单（`MIUBOT_ALLOWED_PEERS` 优先于配置）；空 = 不限制。 */
+	allowedPeers(): string[];
 	log(level: LogLevel, text: string, sessionId?: string): void;
 }): InboundHandler {
 	const { state, agentHost, platform, stickerTagging, proactive, inboundReferences, stickerStore, log } = deps;
@@ -56,6 +59,15 @@ export function createInboundHandler(deps: {
 		const senderId = normalized.senderId;
 		const text = normalized.text;
 		const mentioned = normalized.mentionedBot;
+		// 白名单在归一化之后、任何副作用之前判定：未授权的会话不该留下 peer 记录、
+		// 不该触发插件事件，也不该给发送方任何回复（回复本身就等于确认 Bot 在线）。
+		const allowedPeers = deps.allowedPeers();
+		if (allowedPeers.length > 0) {
+			if (!allowedPeers.includes(peerKey(isGroup ? "group" : "c2c", peerId))) {
+				log("INFO", `忽略未授权会话的消息：${isGroup ? "群" : "私聊"} ${peerId}`);
+				return;
+			}
+		}
 		const peerConfig: PeerConfig = state.registerPeer(
 			isGroup ? "group" : "c2c",
 			peerId,
@@ -208,7 +220,9 @@ export function createInboundHandler(deps: {
 				const detail = error instanceof Error ? error.message : String(error);
 				log("ERROR", `Agent 执行失败：${detail}`, session.id);
 				stream.cancel();
-				await channel.sendText(message.replyTarget, `Agent 执行失败：${detail}`);
+				// 对外只回通用文案：provider 报错常带 URL、账号、余额之类的内部信息，
+				// 群里的任何人都能看到。排查细节留在运行日志里。
+				await channel.sendText(message.replyTarget, "处理这条消息时出错了，已经记在运行日志里，可以稍后再试一次。");
 				session.messages.pop();
 				await state.saveSessions();
 				return;

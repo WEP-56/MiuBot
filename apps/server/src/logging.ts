@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, rename, rm, stat } from "node:fs/promises";
+import { createRotatingWriter } from "./rotating-writer.ts";
 
 export type LogLevel = "INFO" | "WARN" | "ERROR";
 
@@ -33,8 +33,7 @@ export type RuntimeLoggerOptions = {
 
 const DEFAULT_LIMIT = 1000;
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
-const DEFAULT_MAX_FILES = 5;
-/** 单条日志的字符上限：防止一次异常把整段提示词/响应体倒进日志。 */
+const DEFAULT_MAX_FILES = 5; /** 单条日志的字符上限：防止一次异常把整段提示词/响应体倒进日志。 */
 const MAX_TEXT_LENGTH = 2000;
 
 /**
@@ -49,43 +48,25 @@ const MAX_TEXT_LENGTH = 2000;
  */
 export function createRuntimeLogger(options: RuntimeLoggerOptions): RuntimeLogger {
 	const limit = options.limit ?? DEFAULT_LIMIT;
-	const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
-	const maxFiles = Math.max(2, options.maxFiles ?? DEFAULT_MAX_FILES);
+	const writer = createRotatingWriter({
+		filePath: options.filePath,
+		dir: options.dir,
+		maxBytes: options.maxBytes ?? DEFAULT_MAX_BYTES,
+		maxFiles: options.maxFiles ?? DEFAULT_MAX_FILES,
+	});
 	let entries: RuntimeLog[] = [];
-	/** 当前文件字节数；`-1` 表示还没 stat 过。 */
-	let size = -1;
-	let queue: Promise<void> = Promise.resolve();
-
-	const enqueue = (task: () => Promise<void>): void => {
-		queue = queue.then(task, task).catch(() => undefined);
-	};
-
-	async function currentSize(): Promise<number> {
-		if (size >= 0) return size;
-		try {
-			size = (await stat(options.filePath)).size;
-		} catch {
-			size = 0;
-		}
-		return size;
-	}
-
-	async function rotate(): Promise<void> {
-		// 先删最旧的，再从新到旧挪，最后把当前文件改成 .1。
-		await rm(`${options.filePath}.${maxFiles - 1}`, { force: true });
-		for (let index = maxFiles - 2; index >= 1; index -= 1) {
-			await rename(`${options.filePath}.${index}`, `${options.filePath}.${index + 1}`).catch(() => undefined);
-		}
-		await rename(options.filePath, `${options.filePath}.1`).catch(() => undefined);
-		size = 0;
-	}
 
 	return {
 		list: () => entries,
 		async load() {
-			entries = await readRecent(options.filePath, maxFiles, limit);
-			size = -1;
-			await currentSize();
+			entries = (await writer.readRecent(limit)).flatMap((line) => {
+				try {
+					return [JSON.parse(line) as RuntimeLog];
+				} catch {
+					// 轮转时可能留下半行，跳过。
+					return [];
+				}
+			});
 		},
 		write: (level, text, sessionId) => {
 			const entry: RuntimeLog = {
@@ -97,18 +78,10 @@ export function createRuntimeLogger(options: RuntimeLoggerOptions): RuntimeLogge
 			entries.push(entry);
 			if (entries.length > limit) entries = entries.slice(-limit);
 			console[level === "ERROR" ? "error" : level === "WARN" ? "warn" : "info"](`[${level}] ${entry.text}`);
-			const line = `${JSON.stringify(entry)}\n`;
-			const bytes = Buffer.byteLength(line);
-			enqueue(async () => {
-				const current = await currentSize();
-				if (current > 0 && current + bytes > maxBytes) await rotate();
-				await mkdir(options.dir, { recursive: true });
-				await appendFile(options.filePath, line, "utf8");
-				size = (size < 0 ? 0 : size) + bytes;
-			});
+			writer.append(`${JSON.stringify(entry)}\n`);
 		},
 		async flush() {
-			await queue;
+			await writer.flush();
 		},
 	};
 }
@@ -143,30 +116,4 @@ export function redact(text: string): string {
 function sanitize(text: string): string {
 	const redacted = redact(text);
 	return redacted.length > MAX_TEXT_LENGTH ? `${redacted.slice(0, MAX_TEXT_LENGTH)}…（已截断）` : redacted;
-}
-
-/** 当前文件 + `.1`…`.N`，从新到旧读，凑够 `limit` 条再按时间正序返回。 */
-async function readRecent(filePath: string, maxFiles: number, limit: number): Promise<RuntimeLog[]> {
-	const collected: RuntimeLog[] = [];
-	const candidates = [filePath];
-	for (let index = 1; index <= maxFiles - 1; index += 1) candidates.push(`${filePath}.${index}`);
-	for (const candidate of candidates) {
-		if (collected.length >= limit) break;
-		let content: string;
-		try {
-			content = await readFile(candidate, "utf8");
-		} catch {
-			continue;
-		}
-		const lines = content.split("\n").filter(Boolean).reverse();
-		for (const line of lines) {
-			if (collected.length >= limit) break;
-			try {
-				collected.push(JSON.parse(line) as RuntimeLog);
-			} catch {
-				// 轮转时可能留下半行，跳过。
-			}
-		}
-	}
-	return collected.reverse();
 }

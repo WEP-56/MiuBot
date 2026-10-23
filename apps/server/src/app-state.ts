@@ -153,6 +153,11 @@ export function createAppState(options: { dataDir: string }): AppState {
 					},
 				},
 				imageProviders: Array.isArray(current.imageProviders) ? current.imageProviders : defaults.imageProviders,
+				access: {
+					allowedPeers: Array.isArray(current.access?.allowedPeers)
+						? current.access.allowedPeers.filter((key): key is string => typeof key === "string")
+						: defaults.access.allowedPeers,
+				},
 				proactiveGate: { ...defaults.proactiveGate, ...current.proactiveGate },
 				mcpServers: Array.isArray(current.mcpServers) ? current.mcpServers : defaults.mcpServers,
 				plugins: {

@@ -29,12 +29,14 @@ const PASSWORD = "integration-test-password";
 let dir: string;
 let auth: AuthService;
 let logs: string[];
+let auditEntries: Array<{ action: string; actor: string; detail: string }>;
 
 beforeEach(async () => {
 	dir = await mkdtemp(join(tmpdir(), "miubot-http-"));
 	process.env.MIUBOT_ADMIN_PASSWORD = PASSWORD;
 	auth = await createAuthService({ dataDir: join(dir, "data"), secureCookies: false });
 	logs = [];
+	auditEntries = [];
 });
 
 afterEach(async () => {
@@ -58,6 +60,13 @@ function stubContext(overrides: Partial<Record<keyof HttpContext, unknown>> = {}
 		qq: { states: new Map() },
 		config: { get: () => createDefaultConfig(), replace: () => undefined, save: async () => undefined },
 		logs: { list: () => [] },
+		audit: {
+			record: (entry: { action: string; actor: string; detail: string }) => {
+				auditEntries.push(entry);
+			},
+			list: async () => auditEntries,
+			flush: async () => undefined,
+		},
 		...overrides,
 	} as unknown as HttpContext;
 }
@@ -304,6 +313,37 @@ describe("request hygiene", () => {
 		}
 	});
 
+	it("records mutations in the audit log but not reads", async () => {
+		const harness = await startServer();
+		try {
+			const cookie = await loginCookie(harness.port);
+			await call(harness.port, { path: "/api/logs", headers: { cookie } });
+			await call(harness.port, {
+				method: "PUT",
+				path: "/api/config",
+				headers: { cookie, "content-type": "application/json" },
+				body: JSON.stringify({}),
+			});
+			expect(auditEntries).toHaveLength(1);
+			expect(auditEntries[0]?.action).toBe("api.mutation");
+			expect(auditEntries[0]?.detail).toContain("PUT /api/config");
+		} finally {
+			await harness.close();
+		}
+	});
+
+	it("serves the audit trail through the management API", async () => {
+		const harness = await startServer();
+		try {
+			const cookie = await loginCookie(harness.port);
+			const response = await call(harness.port, { path: "/api/audit?limit=5", headers: { cookie } });
+			expect(response.status).toBe(200);
+			expect((JSON.parse(response.text) as { entries: unknown[] }).entries).toEqual([]);
+		} finally {
+			await harness.close();
+		}
+	});
+
 	it("hides internal error details behind a trace id", async () => {
 		const context = stubContext({
 			logs: {
@@ -358,6 +398,58 @@ describe("request hygiene", () => {
 			const limited = await call(harness.port, { path: "/api/health" });
 			expect(limited.status).toBe(429);
 			expect(limited.headers["retry-after"]).toBe("1");
+		} finally {
+			await harness.close();
+		}
+	});
+});
+
+describe("inbound whitelist", () => {
+	it("saves valid peer keys and rejects malformed ones", async () => {
+		const harness = await startServer();
+		try {
+			const cookie = await loginCookie(harness.port);
+			const saved = await call(harness.port, {
+				method: "PUT",
+				path: "/api/access",
+				headers: { cookie, "content-type": "application/json" },
+				body: JSON.stringify({ allowedPeers: ["group:123456", "c2c:abcdef"] }),
+			});
+			expect(saved.status).toBe(200);
+			expect((JSON.parse(saved.text) as { allowedPeers: string[] }).allowedPeers).toEqual([
+				"group:123456",
+				"c2c:abcdef",
+			]);
+
+			const rejected = await call(harness.port, {
+				method: "PUT",
+				path: "/api/access",
+				headers: { cookie, "content-type": "application/json" },
+				body: JSON.stringify({ allowedPeers: ["123456"] }),
+			});
+			expect(rejected.status).toBe(400);
+		} finally {
+			await harness.close();
+		}
+	});
+
+	it("stays read-only when the environment variable wins", async () => {
+		const context = stubContext({ envAllowedPeers: ["group:999"] });
+		const harness = await startServer({ context });
+		try {
+			const cookie = await loginCookie(harness.port);
+			const read = await call(harness.port, { path: "/api/access", headers: { cookie } });
+			expect(read.status).toBe(200);
+			const payload = JSON.parse(read.text) as { allowedPeers: string[]; source: string };
+			expect(payload).toEqual({ allowedPeers: ["group:999"], source: "env" });
+
+			const write = await call(harness.port, {
+				method: "PUT",
+				path: "/api/access",
+				headers: { cookie, "content-type": "application/json" },
+				body: JSON.stringify({ allowedPeers: [] }),
+			});
+			expect(write.status).toBe(409);
 		} finally {
 			await harness.close();
 		}

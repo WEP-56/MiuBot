@@ -12,11 +12,13 @@ import { McpRuntime } from "@miubot/plugin/tools/index";
 import { createAgentHost } from "./agent-host.ts";
 import { createApiSecurity, loadOrCreateAuthToken } from "./api-security.ts";
 import { createAppState } from "./app-state.ts";
+import { createAuditLog } from "./audit.ts";
 import { createAuthService } from "./auth.ts";
 import type { HttpContext } from "./http/context.ts";
 import { createRequestHandler } from "./http/server.ts";
 import { createWebAssets } from "./http/static.ts";
 import { createRuntimeLogger } from "./logging.ts";
+import { isPeerKey } from "./peer-key.ts";
 import { createInboundReferenceStore, createPluginLogger, createPluginSendBridge } from "./platform/plugin-bridge.ts";
 import { createQqPlatform } from "./platform/runtime.ts";
 import { createProactive } from "./proactive.ts";
@@ -25,7 +27,7 @@ import { createInboundHandler } from "./qq/inbound.ts";
 import { sessionPromptContexts, stickerSendContexts } from "./session-context.ts";
 import { createStickerTagging } from "./sticker-tagging.ts";
 import { StickerStore } from "./stickers.ts";
-import { auxiliaryToolNames, toolNames } from "./tool-names.ts";
+import { auxiliaryToolNames, isNativeTool, toolNames } from "./tool-names.ts";
 import { createUpdateChecker } from "./update-check.ts";
 import { resolveVersion } from "./version.ts";
 
@@ -79,11 +81,30 @@ const secureCookies = resolveSecureCookies(allowedHosts);
 /** 运行日志：内存最近 1000 条 + `runtime.log` 追加写入。 */
 const logger = createRuntimeLogger({ filePath: logsPath, dir: dataDir });
 const log = logger.write;
+/**
+ * 入站白名单（`group:<群 ID>` / `c2c:<用户 ID>`，逗号分隔）。
+ *
+ * 设了就以环境变量为准：工作台里改不动，避免「UI 显示一套、实际生效另一套」。
+ */
+const envAllowedPeers = parsePeerList(process.env.MIUBOT_ALLOWED_PEERS);
+/** 整体禁用文件与命令类工具（`bash` / `write` / `edit` / `read` …），公网部署的保险丝。 */
+const disableNativeTools = isDisabled(process.env.MIUBOT_DISABLE_NATIVE_TOOLS);
 
 for (const entry of allowedHosts) {
 	if (entry.includes("*")) log("WARN", `MIUBOT_ALLOWED_HOSTS 不支持通配符，已忽略：${entry}`);
 }
-const auth = await createAuthService({ dataDir, secureCookies });
+/**
+ * 审计日志：登录/登出/改密 + 所有变更类管理请求。
+ *
+ * 与运行日志分开存：运行日志会被工作台轮询、也会随 issue 贴出去，而审计要回答的是
+ * 「这条配置是谁什么时候改的」，得留得住、冲不掉。
+ */
+const audit = createAuditLog({ filePath: join(dataDir, "audit.log"), dir: dataDir });
+const auth = await createAuthService({
+	dataDir,
+	secureCookies,
+	onAudit: (action, detail) => audit.record({ action, actor: "admin", detail }),
+});
 /** 管理 API 令牌：只给自动化脚本用（`Authorization: Bearer`），不再换浏览器 Cookie。 */
 const authTokenPath = join(dataDir, "api-token");
 const apiSecurity = createApiSecurity({
@@ -185,6 +206,7 @@ const agentHost = createAgentHost({
 	pluginTools: pluginHost.tools,
 	// 同理，插件贡献的对话钩子也按 Bot 过滤，并且只在会话创建时取一次。
 	pluginExtensions: pluginHost.extensions,
+	disableNativeTools,
 	log: (level, text) => log(level, text),
 });
 const stickerTagging = createStickerTagging({
@@ -209,6 +231,8 @@ const inbound = createInboundHandler({
 	proactive,
 	inboundReferences,
 	stickerStore,
+	// 环境变量优先：设了 MIUBOT_ALLOWED_PEERS 就以它为准，工作台只读展示。
+	allowedPeers: () => envAllowedPeers ?? state.getConfig().access.allowedPeers,
 	log,
 });
 connection = createQqConnection({
@@ -242,8 +266,10 @@ const httpContext: HttpContext = {
 	agentHost,
 	mcpRuntime,
 	auth,
+	audit,
 	version,
 	updates,
+	envAllowedPeers,
 	plugins: {
 		list: pluginHost.list,
 		get: pluginHost.get,
@@ -314,6 +340,22 @@ if (auth.generatedPassword) {
 	log("WARN", "已生成管理员口令（只打印在进程输出里，未写入运行日志）；请立刻登录工作台并修改。");
 }
 log("INFO", `自动化令牌（仅请求头，不用于浏览器）：${authTokenPath}`);
+// 公网部署最容易漏的两件事，启动时直接说出来，别等出事才发现。
+const effectiveAllowedPeers = envAllowedPeers ?? state.getConfig().access.allowedPeers;
+if (effectiveAllowedPeers.length === 0)
+	log("WARN", "未配置入站白名单：任何群、任何私聊都能触发 Agent（工作台「设置 → 入站白名单」）");
+else
+	log(
+		"INFO",
+		`入站白名单：${effectiveAllowedPeers.length} 个会话${envAllowedPeers ? "（来自 MIUBOT_ALLOWED_PEERS）" : ""}`,
+	);
+const riskyTools = state.getConfig().tools.enabled.filter((name) => isNativeTool(name));
+if (riskyTools.length > 0)
+	log(
+		"WARN",
+		`已启用高危工具：${riskyTools.join("、")}——公网部署下这等于把服务器交给任何能给 Bot 发消息的人（提示注入 = RCE）`,
+	);
+if (disableNativeTools) log("WARN", "MIUBOT_DISABLE_NATIVE_TOOLS 已生效：文件与命令类工具全部禁用");
 if ((await assets.index()) === undefined)
 	log("WARN", `未找到工作台构建产物：${assets.distDir}/index.html（开发时用 vite dev，部署前先构建）`);
 log("INFO", "Miubot Server 已启动");
@@ -338,6 +380,7 @@ async function shutdown(signal: string): Promise<void> {
 	// 最后一行日志也要落盘：flush 放在「已停止」之后。
 	await Promise.allSettled([
 		logger.flush(),
+		audit.flush(),
 		auth.flush(),
 		state.saveConfig(),
 		state.saveSessions(),
@@ -361,6 +404,24 @@ function splitList(value: string | undefined): string[] {
 function isDisabled(value: string | undefined): boolean {
 	const normalized = value?.trim().toLowerCase();
 	return normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off";
+}
+
+/**
+ * 解析 `MIUBOT_ALLOWED_PEERS`。未设置返回 `undefined`（表示「听配置的」）；
+ * 设置了但一条都不合法时也返回 `undefined` 并告警——空值绝不能被理解成「放行全部」。
+ */
+function parsePeerList(value: string | undefined): string[] | undefined {
+	if (value === undefined) return undefined;
+	const keys = splitList(value);
+	const valid = keys.filter((key) => isPeerKey(key));
+	for (const key of keys) {
+		if (!isPeerKey(key)) log("WARN", `MIUBOT_ALLOWED_PEERS 条目格式无效，已忽略：${key}`);
+	}
+	if (valid.length === 0) {
+		log("ERROR", "MIUBOT_ALLOWED_PEERS 没有任何合法条目，本次启动改为读取工作台里的配置");
+		return undefined;
+	}
+	return [...new Set(valid)];
 }
 
 function resolveSecureCookies(allowedHosts: string[]): boolean {

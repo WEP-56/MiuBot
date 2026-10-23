@@ -12,7 +12,7 @@ import { downloadImage } from "./media.ts";
 import type { OutboundChannel } from "./platform/outbound.ts";
 import type { AppConfig, ModelConfig, ProviderConfig } from "./runtime.ts";
 import { extensionForMime, type Sticker, type StickerStore } from "./stickers.ts";
-import { toolNames } from "./tool-names.ts";
+import { isNativeTool, toolNames } from "./tool-names.ts";
 
 export type RuntimeMessage = { role: "user" | "assistant"; content: string; sender?: string; timestamp: string };
 export type RuntimeSession = {
@@ -71,6 +71,13 @@ type AgentHostDependencies = {
 	mcpRuntime: McpRuntime;
 	pluginTools: PluginToolScope;
 	pluginExtensions: PluginExtensionScope;
+	/**
+	 * 整体禁用文件与命令类工具（`MIUBOT_DISABLE_NATIVE_TOOLS=1`）。
+	 *
+	 * 配置里可能还留着这些名字（换机器、改环境变量都会），所以在这里过滤一次，
+	 * 保证「关了就是关了」，不依赖管理员记得去 UI 里逐个取消勾选。
+	 */
+	disableNativeTools?: boolean;
 	/** 运行日志；用于把扩展装载失败等原因暴露出来，而不是让它静默消失。 */
 	log?: (level: "INFO" | "WARN" | "ERROR", text: string) => void;
 };
@@ -131,7 +138,9 @@ export function createAgentHost(deps: AgentHostDependencies) {
 		if (peer?.useTools === false) return [];
 		return [
 			// 只认 `/api/tools` 白名单里的名字：配置里残留的其它值一律忽略。
-			...current.tools.enabled.filter((name) => toolNames.includes(name)),
+			...current.tools.enabled.filter(
+				(name) => toolNames.includes(name) && !(deps.disableNativeTools && isNativeTool(name)),
+			),
 			...(current.tools.skillsEnabled ? ["load_skill"] : []),
 			...(current.tools.stickersEnabled ? ["search_stickers", "send_sticker"] : []),
 			...deps.mcpRuntime.getEnabledToolDefinitions().map((tool) => tool.name),

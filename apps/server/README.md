@@ -43,6 +43,9 @@ curl.exe -H "Authorization: Bearer $token" http://127.0.0.1:8787/api/config
 | `POST /api/auth/logout` | 免 | 撤销当前会话并清 Cookie |
 | `GET /api/auth/me` | 免 | `{ authenticated, sessions }`，工作台据此决定显示登录页还是工作台 |
 | `POST /api/auth/password` | 需 | `{ current, next }`，改口令并作废其他会话 |
+| `GET /api/access` | 需 | 入站白名单（`{ allowedPeers, source: "config" \| "env" }`） |
+| `PUT /api/access` | 需 | `{ allowedPeers }`；条目格式 `group:<ID>` / `c2c:<ID>`；环境变量指定时 409 |
+| `GET /api/audit` | 需 | 审计日志（`?limit=`，最多 500，新的在前） |
 | 其余 `/api/*` | 需 | 会话 Cookie 或 `Authorization: Bearer` |
 
 - 旧端点 `POST /api/auth/session`（无认证下发令牌 Cookie）**已删除**。
@@ -60,6 +63,23 @@ curl.exe -H "Authorization: Bearer $token" http://127.0.0.1:8787/api/config
 写入前统一脱敏（`sk-` 类密钥、Bearer、`apiKey=` 这类键值对、32 位以上十六进制、超长 base64），单条超过 2000 字符截断——
 调用点不需要各自记得处理。首次启动生成的管理员口令**只写进程输出**，不进 `runtime.log`。
 
+## 审计日志
+
+`audit.log`（JSON Lines，10 MB × 3 轮转）记三类事：登录成功/失败/锁定、登出、改密，以及**所有变更类管理请求**
+（非 GET/HEAD，由 `http/server.ts` 统一埋点，路由不用各自记得）。记录只有 `{ at, action, actor, detail }`，
+不存请求体（里面可能带密钥）；写入前同样过一遍脱敏。
+
+与运行日志分文件：运行日志会被工作台轮询、也可能随 issue 贴出去，审计要回答的是「这条配置是谁什么时候改的」。
+
+## 入站白名单与工具策略
+
+`config.access.allowedPeers` 为空表示不限制（旧行为），填了就只有列出的 `group:<群 ID>` / `c2c:<用户 ID>` 能触发 Agent；
+未命中的消息在归一化之后、任何副作用之前被丢弃——不建对象记录、不触发插件事件、也不回复（回复等于确认 Bot 在线）。
+
+文件与命令类工具（`read` / `bash` / `powershell` / `edit` / `write` / `grep` / `find` / `ls`）在公网部署下等于把服务器交给
+任何能给 Bot 发消息的人。启用时启动日志会 WARN、工作台 Tools 页会红字提示；`MIUBOT_DISABLE_NATIVE_TOOLS=1`
+可在会话里整体禁用这一组，不依赖管理员去 UI 里逐个取消勾选。
+
 ## 环境变量
 
 | 变量 | 默认 | 说明 |
@@ -76,6 +96,8 @@ curl.exe -H "Authorization: Bearer $token" http://127.0.0.1:8787/api/config
 | `MIUBOT_VERSION` | 空 | 版本号覆盖（发布包用根 `VERSION` 文件） |
 | `MIUBOT_UPDATE_CHECK` | 开 | 更新检查；`0` = 完全不出站 |
 | `MIUBOT_UPDATE_REPO` | `WEP-56/MiuBot` | 更新检查的仓库（fork 用） |
+| `MIUBOT_ALLOWED_PEERS` | 空 | 入站白名单（`group:<群 ID>` / `c2c:<用户 ID>`，逗号分隔）。设了就以它为准，工作台只读 |
+| `MIUBOT_DISABLE_NATIVE_TOOLS` | 空 | `1` = 整体禁用 `read` / `bash` / `powershell` / `edit` / `write` / `grep` / `find` / `ls`，不管配置里勾了什么 |
 
 ## 退出
 

@@ -11,6 +11,17 @@ export const nativeToolNames = ["read", "bash", "powershell", "edit", "write", "
 
 export type NativeToolName = (typeof nativeToolNames)[number];
 
+/**
+ * 是否属于「文件与命令类」工具。
+ *
+ * 这一组全部能读写服务器文件或执行命令，入口却是「任何能给 Bot 发消息的人」——
+ * 一条精心构造的消息就是一次提示注入，注入成功即 RCE。公网部署下默认不该开，
+ * 开了要在启动日志与工作台里明示；`MIUBOT_DISABLE_NATIVE_TOOLS=1` 可整体禁用。
+ */
+export function isNativeTool(name: string): boolean {
+	return (nativeToolNames as readonly string[]).includes(name);
+}
+
 /** 有独立开关、但也在 `config.tools.enabled` 列表里的工具。 */
 export const configurableToolNames = ["web_search", "image_gen"] as const;
 

@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { HttpContext } from "./context.ts";
+import { handleAccessRoutes } from "./routes/access.ts";
 import { handleAuthRoutes } from "./routes/auth.ts";
 import { handleChatRoutes } from "./routes/chat.ts";
 import { handleConfigRoutes } from "./routes/config.ts";
@@ -24,6 +25,7 @@ type RouteHandler = (ctx: HttpContext, req: IncomingMessage, res: ServerResponse
 const handlers: RouteHandler[] = [
 	handleAuthRoutes,
 	handleSystemRoutes,
+	handleAccessRoutes,
 	handleConfigRoutes,
 	handleToolRoutes,
 	handleProactiveRoutes,

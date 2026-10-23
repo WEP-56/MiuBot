@@ -66,6 +66,8 @@ export type AuthOptions = {
 	dataDir: string;
 	/** HTTPS 部署时为 Cookie 加 `Secure`。 */
 	secureCookies: boolean;
+	/** 审计钩子：登录成功/失败/锁定、登出、改密。不传则什么都不记。 */
+	onAudit?: (action: string, detail: string) => void;
 };
 
 type StoredSession = { id: string; createdAt: number; expiresAt: number };
@@ -126,10 +128,13 @@ export async function createAuthService(options: AuthOptions): Promise<AuthServi
 		passwordPath,
 		async login(password) {
 			const now = Date.now();
-			if (lockedUntil > now)
+			if (lockedUntil > now) {
+				options.onAudit?.("auth.login.locked", "登录被拒绝：仍处于锁定期");
 				return { ok: false, reason: "locked", retryAfterSeconds: Math.ceil((lockedUntil - now) / 1000) };
+			}
 			if (await verifyPassword(password, passwordHash)) {
 				resetFailures();
+				options.onAudit?.("auth.login", "管理员登录成功");
 				return { ok: true, token: await issueSession() };
 			}
 			// 失败计数按窗口滚动：5 分钟内连续 5 次才锁，否则只清零重新数。
@@ -142,8 +147,10 @@ export async function createAuthService(options: AuthOptions): Promise<AuthServi
 				lockedUntil = now + LOCK_MS;
 				failures = 0;
 				firstFailureAt = 0;
+				options.onAudit?.("auth.login.locked", "连续口令错误，已锁定 5 分钟");
 				return { ok: false, reason: "locked", retryAfterSeconds: Math.ceil(LOCK_MS / 1000) };
 			}
+			options.onAudit?.("auth.login.failed", `口令错误（连续第 ${failures} 次）`);
 			return { ok: false, reason: "invalid", retryAfterSeconds: 0 };
 		},
 		verify(sessionToken) {
@@ -163,12 +170,24 @@ export async function createAuthService(options: AuthOptions): Promise<AuthServi
 		},
 		async revoke(sessionToken) {
 			if (!sessionToken) return;
-			if (sessions.delete(hashToken(sessionToken))) await saveSessions();
+			if (sessions.delete(hashToken(sessionToken))) {
+				options.onAudit?.("auth.logout", "会话已撤销");
+				await saveSessions();
+			}
 		},
 		async changePassword(current, next, keepToken) {
-			if (!(await verifyPassword(current, passwordHash))) return { ok: false, message: "当前口令不正确" };
-			if (next.length < PASSWORD_MIN_LENGTH) return { ok: false, message: `新口令至少 ${PASSWORD_MIN_LENGTH} 位` };
-			if (next === current) return { ok: false, message: "新口令不能与当前口令相同" };
+			if (!(await verifyPassword(current, passwordHash))) {
+				options.onAudit?.("auth.password.failed", "改密被拒绝：当前口令不正确");
+				return { ok: false, message: "当前口令不正确" };
+			}
+			if (next.length < PASSWORD_MIN_LENGTH) {
+				options.onAudit?.("auth.password.failed", "改密被拒绝：新口令太短");
+				return { ok: false, message: `新口令至少 ${PASSWORD_MIN_LENGTH} 位` };
+			}
+			if (next === current) {
+				options.onAudit?.("auth.password.failed", "改密被拒绝：新口令与当前相同");
+				return { ok: false, message: "新口令不能与当前口令相同" };
+			}
 			const hash = await hashPassword(next);
 			await writeFileAtomic(passwordPath, `${hash}\n`);
 			passwordHash = hash;
@@ -177,6 +196,7 @@ export async function createAuthService(options: AuthOptions): Promise<AuthServi
 			for (const id of [...sessions.keys()]) if (id !== keep) sessions.delete(id);
 			resetFailures();
 			await saveSessions();
+			options.onAudit?.("auth.password", "管理员口令已修改，其余会话已作废");
 			return { ok: true };
 		},
 		activeSessions: () => sessions.size,

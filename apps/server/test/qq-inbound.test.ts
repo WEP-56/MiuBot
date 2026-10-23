@@ -45,7 +45,7 @@ describe("QQ inbound pipeline", () => {
 		await rm(dir, { recursive: true, force: true });
 	});
 
-	async function setup(overrides: { mentioned?: boolean } = {}) {
+	async function setup(overrides: { mentioned?: boolean; allowedPeers?: string[] } = {}) {
 		const state = createAppState({ dataDir: dir });
 		await state.load();
 		const prompts: string[] = [];
@@ -97,6 +97,7 @@ describe("QQ inbound pipeline", () => {
 			proactive,
 			inboundReferences: createInboundReferenceStore(),
 			stickerStore: new StickerStore(dir),
+			allowedPeers: () => overrides.allowedPeers ?? [],
 			log,
 		});
 		const bot = {} as unknown as QQBot;
@@ -163,5 +164,26 @@ describe("QQ inbound pipeline", () => {
 		expect(sessions[0]?.id).not.toBe(first);
 		expect(sessions[1]?.active).toBe(false);
 		expect(sendText).toHaveBeenLastCalledWith(expect.anything(), "已开始新会话。");
+	});
+
+	it("ignores peers outside the whitelist without leaving a trace", async () => {
+		const { state, handler, bot, botConfig, prompts, sendText, proactive } = await setup({
+			allowedPeers: ["group:some-other-group"],
+		});
+		await handler(bot, botConfig as never, inbound());
+
+		// 不回复、不进 Agent、不排插话，也不建对象记录与会话。
+		expect(prompts).toEqual([]);
+		expect(sendText).not.toHaveBeenCalled();
+		expect(proactive.queueGroupMessage).not.toHaveBeenCalled();
+		expect(state.getSessions()).toHaveLength(0);
+		expect(state.getPeers()).toHaveLength(0);
+	});
+
+	it("lets a whitelisted peer through", async () => {
+		const { handler, bot, botConfig, prompts } = await setup({ allowedPeers: ["group:group-1"] });
+		await handler(bot, botConfig as never, inbound());
+
+		expect(prompts).toEqual(["你好"]);
 	});
 });

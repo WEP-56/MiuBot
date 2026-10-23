@@ -43,6 +43,18 @@ export type QqBotConfig = {
 };
 export type PersonaConfig = { id: string; name: string; description: string; systemPrompt: string };
 export type WebSearchProvider = "tavily" | "brave" | "exa" | "serper";
+/**
+ * 入站访问控制。
+ *
+ * `allowedPeers` 是「谁能用这个 Bot」的唯一执行点：空数组表示不限制，保留这个默认值
+ * 是为了升级后不会突然静默失联；公网部署应该把它填上。
+ *
+ * 键的格式是 `group:<群 ID>` / `c2c:<用户 ID>`，与 `peer-configs.json` 里的 scope + peerId
+ * 一致（QQ 的 openid 本来就按 Bot 隔离，所以这里不再带 botId）。
+ */
+export type AccessSettings = {
+	allowedPeers: string[];
+};
 export type ToolSettings = {
 	enabled: string[];
 	mcpEnabled: boolean;
@@ -87,6 +99,7 @@ export type AppConfig = {
 	personas: PersonaConfig[];
 	activePersonaId: string;
 	tools: ToolSettings;
+	access: AccessSettings;
 	mcpServers: McpServerConfig[];
 	proactiveGate: ProactiveGateSettings;
 	plugins: PluginSettings;
@@ -153,6 +166,7 @@ export function createDefaultConfig(): AppConfig {
 			webSearch: { provider: "tavily", apiKeys: { tavily: "", brave: "", exa: "", serper: "" } },
 		},
 		mcpServers: [],
+		access: { allowedPeers: [] },
 		proactiveGate: {
 			enabled: false,
 			mode: "smart",

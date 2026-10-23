@@ -27,5 +27,11 @@ export async function handleSystemRoutes(
 		json(res, 200, { logs: ctx.logs.list().slice(-500).reverse() });
 		return true;
 	}
+	if (url.pathname === "/api/audit" && req.method === "GET") {
+		// 上限 500：审计日志是给人事后翻的，不需要一次拉全量。
+		const limit = Math.min(500, Math.max(1, Number(url.searchParams.get("limit") ?? 200) || 200));
+		json(res, 200, { entries: await ctx.audit.list(limit) });
+		return true;
+	}
 	return false;
 }
