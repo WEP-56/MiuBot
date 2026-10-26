@@ -1,7 +1,7 @@
 # 交接文档：Plugin 模块（阶段 A / B / C 主体已完成）
 
 > 用途：因会话上下文过长，在新会话继续开发时先读这份。
-> 最后更新：2026-10-23 18:40
+> 最后更新：2026-10-26 16:30
 
 **第一次读这份时按这个顺序：**
 
@@ -155,21 +155,23 @@ Token 采集怎么做：
 
 **阶段 C 的 Schema Config 已完成（2026-10-23，`88fee6d`）**：manifest 声明 `config` → 宿主校验并合成默认值 → 工作台渲染表单 → 插件从 `ctx.config` 读。`miubot.welcome` 已从「把欢迎语存在插件存储里」迁到 manifest 配置。
 
-**插件包的安装 / 上传 / 卸载已完成（2026-10-23，未提交）**：`POST /api/plugins/install` 从本地目录复制插件包，`POST /api/plugins/import` 接收 ZIP 上传（工作台拖拽或选文件），`POST /api/plugins/:id/uninstall` 删除插件目录并按勾选处理数据与配置。ZIP 解压与技能导入共用 `packages/plugin/src/archive.ts`。
+**插件包的安装 / 上传 / 卸载已完成（2026-10-23，已随 v0.3.0 发布）**：`POST /api/plugins/install` 从本地目录复制插件包，`POST /api/plugins/import` 接收 ZIP 上传（工作台拖拽或选文件），`POST /api/plugins/:id/uninstall` 删除插件目录并按勾选处理数据与配置。ZIP 解压与技能导入共用 `packages/plugin/src/archive.ts`。
 
 **插件闭环现在是完整的**：事件订阅 / 发消息 / 存储 / Agent Tool / 对话钩子五条能力都有权限、代次、`bots` 作用域三道校验，启停即生效（重建会话），失败都写进插件状态或运行日志；配置面（Schema Config）与分发面（目录安装 / ZIP 上传 / 卸载）也已接通。剩下的活是独立 WebUI 入口、后台任务/调度与几只遗留 P2。
 
-**斜杠命令 + 管理员已完成（2026-10-23，未提交）**：`apps/server/src/commands/` 注册表 + 内置 `new` / `compact` / `help` / `admin`，解析在群聊闸门之前（修掉「群里不 @ 就用不了 `/new`」），`config.admins` 决定谁能执行管理员命令（默认空 = 没人能），插件经 `ctx.commands.register()` 注册命令，工作台新增「高级配置 → 斜杠命令」页。明细见 §五.8。
+**斜杠命令 + 管理员已完成（2026-10-23，已随 v0.3.0 发布）**：`apps/server/src/commands/` 注册表 + 内置 `new` / `compact` / `help` / `admin`，解析在群聊闸门之前（修掉「群里不 @ 就用不了 `/new`」），`config.admins` 决定谁能执行管理员命令（默认空 = 没人能），插件经 `ctx.commands.register()` 注册命令，工作台新增「高级配置 → 斜杠命令」页。明细见 §五.8。
 
-**群 / 私聊细粒度配置已完成（2026-10-23，未提交）**：对象配置多了备用模型（主模型连续失败 3 次后本轮临时换用，结束即恢复）与工具覆盖（`toolsOverride`，只作用于内置工具那一段）。同时修掉一个静默失败：provider 报错本来不会让 `prompt()` 抛错，以前只表现为「空回复」。明细见 §五.9。
+**群 / 私聊细粒度配置已完成（2026-10-23，已随 v0.3.0 发布）**：对象配置多了备用模型（主模型连续失败 3 次后本轮临时换用，结束即恢复）与工具覆盖（`toolsOverride`，只作用于内置工具那一段）。同时修掉一个静默失败：provider 报错本来不会让 `prompt()` 抛错，以前只表现为「空回复」。明细见 §五.9。
 
-**图像生成提供商已下移到 Tools（2026-10-23，未提交）**：`config.tools.imageGen.providerId` 显式选择，`image_gen` 不再「挑第一个启用且有 Key 的」；「提供商」页只留 LLM 提供商，图像提供商的增删改与密钥搬进 Tools → 图像生成。老配置自动迁移。明细见 §五.10。
+**图像生成提供商已下移到 Tools（2026-10-23，已随 v0.3.0 发布）**：`config.tools.imageGen.providerId` 显式选择，`image_gen` 不再「挑第一个启用且有 Key 的」；「提供商」页只留 LLM 提供商，图像提供商的增删改与密钥搬进 Tools → 图像生成。老配置自动迁移。明细见 §五.10。
 
-**页面外壳已统一（2026-10-23，未提交）**：8 个管理页改用 `components/PageShell.tsx`，宽度与间距集中声明，外层背景/文字色改走主题变量（顺带修好浅色主题下的黑底）。明细见 §五.11。
+**页面外壳已统一（2026-10-23，已随 v0.3.0 发布）**：8 个管理页改用 `components/PageShell.tsx`，宽度与间距集中声明，外层背景/文字色改走主题变量（顺带修好浅色主题下的黑底）。明细见 §五.11。
 
-验证门禁全绿：`npm run check` / `npm run lint` / `npm test`（**209 files / 2034 tests**）；`apps/web` 的 `tsc --noEmit` 也已干净。
+**v0.4.0（2026-10-26）**：修掉「被引用的图片只报一句『含附件』」与「群聊插话丢掉图片」两个丢像素的路径，群级冷却单位从分钟改成秒。明细见 §五.12。
 
-**公网部署改造（2026-10-23，未提交）**：P0 四项 + 相关 P1 已落地，管理面可以暴露公网。要点：
+验证门禁全绿：`npm run check` / `npm run lint` / `npm test`（**239 files / 2911 tests**，2047 通过、其余 skip）；`apps/web` 的 `tsc --noEmit` 也已干净。
+
+**公网部署改造（2026-10-23，已随 v0.3.0 发布）**：P0 四项 + 相关 P1 已落地，管理面可以暴露公网。要点：
 
 | 改动 | 落点 |
 |---|---|
@@ -440,7 +442,7 @@ Token 采集怎么做：
 - 守卫每次装载重新包一层（`factory: (pi) => registration.factory(guard(pi))`），不缓存到登记对象上，避免改名后守卫文案串号。
 - 测试：`packages/plugin/test/plugin-extensions.test.ts`（9 项，注册表语义）+ `apps/server/test/plugin-extension-session.test.ts`（4 项，真实 `DefaultResourceLoader` + 真实 `createAgentSession`）。会话侧断言落在 `session.extensionRunner.hasHandlers(...)` 与直接 `emit()` 上——`agent_start` / `agent_end` 载荷极简，不需要真实模型请求就能验证「handler 进了运行器且派发时插件代码真的执行」。
 
-### 6. 阶段 C 第 2 项：Schema Config（✅ 2026-10-23，尚未提交）
+### 6. 阶段 C 第 2 项：Schema Config（✅ 2026-10-23，已随 v0.3.0 发布）
 
 | 文件 | 职责 |
 |---|---|
@@ -479,7 +481,7 @@ manifest 声明形状（**扁平一层标量**，`x-ui` 只影响渲染）：
 - 测试：`packages/plugin/test/plugin-config.test.ts`（27 项，含真实宿主 + 真实 `.ts` 入口的端到端：保存 → 重启 → 插件读到新值）+ `apps/server/test/plugins-route.test.ts` 新增 9 项（secret 不回显、校验失败不落盘、停用插件不自启）。
 - 已按 §九 做过反向验证：去掉 `inspectConfig` 的 secret 剔除 → 密钥漏进响应，测试转红；把 `compactAgainstDefaults` 换成全量写入 → 默认值被钉死，测试转红。
 
-### 7. 插件包安装 / ZIP 上传 / 卸载（✅ 2026-10-23，尚未提交）
+### 7. 插件包安装 / ZIP 上传 / 卸载（✅ 2026-10-23，已随 v0.3.0 发布）
 
 | 文件 | 职责 |
 |---|---|
@@ -502,7 +504,7 @@ manifest 声明形状（**扁平一层标量**，`x-ui` 只影响渲染）：
 - 测试：`packages/plugin/test/plugin-install.test.ts`（18 项）、`plugin-archive.test.ts`（23 项，含一次性跑通「解压 → 校验 → rename → 登记」）、`apps/server/test/plugins-route.test.ts` 新增安装 4 / 上传 8 / 卸载 3 项。
 - 反向验证：去掉内置保护 → 内置目录真的被删、测试转红；去掉 id 冲突检查 → 同名内置插件被覆盖、测试转红；去掉 `normalizeEntryPath` 的 `..` 判断 → zip slip 测试转红。
 
-### 8. 斜杠命令 + 管理员（✅ 2026-10-23，未提交）
+### 8. 斜杠命令 + 管理员（✅ 2026-10-23，已随 v0.3.0 发布）
 
 修掉了「群聊下无法使用 `/new`」的根因：群聊闸门（`isGroup && !mentioned → 插话`）曾排在命令判定之前。
 
@@ -539,7 +541,7 @@ manifest 声明形状（**扁平一层标量**，`x-ui` 只影响渲染）：
 
 **需要人工验证（真机）**：群里不 @ 发 `/new` 能新建会话；`/help` 的清单与工作台一致；非管理员发 `/admin` 被拒且审计日志里出现 `command.denied`；在「斜杠命令」页关掉 `/help` 后它不再响应；装一个注册命令的插件后，该命令出现在同一张表里并能执行。
 
-### 9. 群 / 私聊细粒度配置：备用模型 + 分作用域工具（✅ 2026-10-23，未提交）
+### 9. 群 / 私聊细粒度配置：备用模型 + 分作用域工具（✅ 2026-10-23，已随 v0.3.0 发布）
 
 | 文件 | 职责 |
 |---|---|
@@ -580,7 +582,7 @@ manifest 声明形状（**扁平一层标量**，`x-ui` 只影响渲染）：
 发一条消息 → 日志出现 3 次「调用失败」+ 1 次「本轮改用备用模型」，回复正常，会话详情显示「用过备用模型」，
 **下一条消息仍从主模型开始**（日志第 1 次失败又是主模型）。另配一个只留 `web_search` 的群 → 该群 `bash` 不可用、其它群不受影响。
 
-### 10. 图像生成提供商下移到 Tools（✅ 2026-10-23，未提交）
+### 10. 图像生成提供商下移到 Tools（✅ 2026-10-23，已随 v0.3.0 发布）
 
 | 文件 | 职责 |
 |---|---|
@@ -615,7 +617,7 @@ manifest 声明形状（**扁平一层标量**，`x-ui` 只影响渲染）：
 确认用的是 A；把选择改成「未选择」→ Agent 画图时收到「尚未选择提供商」而不是用 B；在 Tools 页新建一个
 图像提供商 → 立即出现在下拉里并能选中；「提供商」页不再出现图像区块。
 
-### 11. PageShell：页面外壳统一（✅ 2026-10-23，未提交）
+### 11. PageShell：页面外壳统一（✅ 2026-10-23，已随 v0.3.0 发布）
 
 `apps/web/src/components/PageShell.tsx`（新）接管所有管理页的外层容器：
 
@@ -643,6 +645,28 @@ Dashboard / Plugins / 高级配置不再黑底。
 
 顺带改了左侧栏（`components/Sidebar.tsx`）：上半区（Logo + 导航 + 高级配置）`min-h-0 flex-1 overflow-y-auto`，
 下半区（主题 / 运行日志 / 设置 / 退出）`shrink-0` 常驻。导航项会随功能增加而变长，小屏下原来会把下半区顶出屏幕。
+
+### 12. 引用图片交给视觉模型 / 插话带图 / 冷却改秒（✅ 2026-10-26，v0.4.0）
+
+| 改动 | 落点 |
+|---|---|
+| 引用消息里的图片下载并作为附图送入模型；额度按整条消息算（正文优先、引用排后），无视觉能力时只留一句说明 | `media.ts` 的 `prepareInboundMedia` / `quoteMediaAttachments` |
+| 被引用附件写清类型与文件名（`图片 a.png` / `语音 xxx（语音识别文本：…）`），不再是「含 1 个附件」 | `platform/inbound.ts` 的 `describeQuoteContext` |
+| 只有引用、没正文没附件的消息不再被丢弃；会话历史落 `[引用消息]` 而不是空串 | `qq/inbound.ts` |
+| 群聊插话的聚合窗口带附件（含引用附件），命中图片时真正 `prompt(..., { images })` | `proactive.ts` 的 `queueGroupMessage` + `prepareMediaAttachments` |
+| 群级冷却 `cooldownMinutes` → `cooldownSeconds`，老配置 ×60 迁移；聚合窗口下限从 3 秒放开到 0 | `runtime.ts`、`app-state.ts` 的 `migrateProactiveGate`、`routes/proactive.ts`、`Advanced.tsx` |
+| 侧栏去掉 `Agent Workspace` 副标题与「运行中」胶囊 | `components/Sidebar.tsx` |
+
+要点与坑：
+
+- **图片处理只留一份**：`prepareMediaAttachments` 收归一化后的 `MediaAttachment[]`，QQ 入站与插话聚合都走它，
+  避免下载/尺寸/张数上限的逻辑出现第二份。`prepareInboundMedia` 只多做一步「把 QQ 平台字段翻成内部形态」。
+- **迁移不能省**：老配置只有 `cooldownMinutes`，直接读 `cooldownSeconds` 会拿到 `undefined` → 冷却静默变 0 秒，
+  用户没改任何设置却开始刷着说话。`app-state.ts:43` 的 `migrateProactiveGate` 有测试锁（`app-state-proactive.test.ts`）。
+- **下限是有意的**：0 表示「不聚合 / 不冷却」，1 秒也允许——分钟制只能填整数，等于把冷却下限钉在 1 分钟。
+
+验收（人工）：群里发图后 @Bot 问「这是什么」→ 模型能描述；引用一张图再问 → 同样能看见；
+把群级冷却填 30 → 保存后 30 秒内不再插话；老配置（`config.json` 里还是 `cooldownMinutes`）升级后冷却仍是原来那个分钟数。
 
 ---
 
