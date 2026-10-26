@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { QQBot, QQBotInboundMessage } from "@tencent-connect/qqbot-nodejs";
@@ -60,10 +60,24 @@ describe("QQ inbound pipeline", () => {
 	});
 
 	async function setup(
-		overrides: { mentioned?: boolean; allowedPeers?: string[]; admins?: string[]; disabled?: string[] } = {},
+		overrides: {
+			mentioned?: boolean;
+			allowedPeers?: string[];
+			admins?: string[];
+			disabled?: string[];
+			/** 配了 Key 才会选中默认模型，视觉能力也跟着生效。 */
+			apiKey?: string;
+		} = {},
 	) {
 		const state = createAppState({ dataDir: dir });
 		await state.load();
+		if (overrides.apiKey) {
+			const current = state.getConfig();
+			state.setConfig({
+				...current,
+				providers: current.providers.map((provider) => ({ ...provider, apiKey: overrides.apiKey ?? "" })),
+			});
+		}
 		if (overrides.admins || overrides.disabled) {
 			state.setConfig({
 				...state.getConfig(),
@@ -204,7 +218,98 @@ describe("QQ inbound pipeline", () => {
 			"小明",
 			"user-1",
 			"今天吃什么",
+			[],
 		);
+	});
+
+	it("hands a group image to the proactive window instead of a placeholder", async () => {
+		const { handler, bot, botConfig, proactive } = await setup();
+		await handler(
+			bot,
+			botConfig as never,
+			inbound({
+				rawEventType: "GROUP_MESSAGE_CREATE",
+				messageId: "msg-image",
+				content: "",
+				mentions: [{ member_openid: "user-1", nickname: "小明", is_you: false }],
+				attachments: [{ content_type: "image/png", url: "https://cdn.example/a.png", filename: "a.png" }],
+			}),
+		);
+
+		// 附件跟着消息进窗口，插话时才可能真的把图片交给模型。
+		expect(proactive.queueGroupMessage).toHaveBeenCalledWith(
+			bot,
+			expect.anything(),
+			"group-1",
+			"小明",
+			"user-1",
+			"[图片]",
+			[expect.objectContaining({ kind: "image", url: "https://cdn.example/a.png" })],
+		);
+	});
+
+	it("passes a quoted image into the proactive window", async () => {
+		const { handler, bot, botConfig, proactive } = await setup();
+		await handler(
+			bot,
+			botConfig as never,
+			inbound({
+				rawEventType: "GROUP_MESSAGE_CREATE",
+				messageId: "msg-quote-proactive",
+				content: "",
+				mentions: [{ member_openid: "user-1", nickname: "小明", is_you: false }],
+				refMsgIdx: "ref-1",
+				msgElements: [
+					{
+						msg_idx: "ref-1",
+						content: "",
+						attachments: [{ content_type: "image/png", url: "https://cdn.example/q.png", filename: "q.png" }],
+					},
+					{ msg_idx: "cur-1", content: "" },
+				],
+			}),
+		);
+
+		const [content, attachments] = vi.mocked(proactive.queueGroupMessage).mock.calls[0]?.slice(5) ?? [];
+		expect(content).toContain("被引用消息的附件：图片 q.png");
+		expect(attachments).toEqual([expect.objectContaining({ kind: "image", url: "https://cdn.example/q.png" })]);
+	});
+
+	it("passes a quoted image to the model instead of a placeholder", async () => {
+		const { handler, bot, botConfig, prompts, agentSession } = await setup({ apiKey: "test-key" });
+		const png = await readFile(new URL("../../../packages/provider/test/data/red-circle.png", import.meta.url));
+		const fetcher = vi.fn(async () => new Response(png, { headers: { "content-type": "image/png" } }));
+		vi.stubGlobal("fetch", fetcher);
+		try {
+			await handler(
+				bot,
+				botConfig as never,
+				inbound({
+					messageId: "msg-quote",
+					content: `<@!${APP_ID}> 这是什么`,
+					refMsgIdx: "ref-1",
+					msgElements: [
+						{
+							msg_idx: "ref-1",
+							content: "",
+							attachments: [
+								{ content_type: "image/png", url: "https://cdn.example/quoted.png", filename: "quoted.png" },
+							],
+						},
+						{ msg_idx: "cur-1", content: "这是什么" },
+					],
+				}),
+			);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+
+		expect(fetcher).toHaveBeenCalledOnce();
+		expect(prompts[0]).toContain("被引用消息的附件：图片 quoted.png");
+		expect(prompts[0]).toContain("被引用消息中的 1 张图片已作为附图提供");
+		expect(agentSession.prompt).toHaveBeenCalledWith(expect.any(String), {
+			images: [expect.objectContaining({ type: "image" })],
+		});
 	});
 
 	it("starts a new session on /new and keeps the older one inactive", async () => {

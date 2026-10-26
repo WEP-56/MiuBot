@@ -82,7 +82,12 @@ export type ProactiveGateSettings = {
 	quietEnd: string;
 	notifyOnLimit: boolean;
 	aggregationSeconds: number;
-	cooldownMinutes: number;
+	/**
+	 * 群级冷却秒数。
+	 *
+	 * 用秒而不是分钟：分钟只能填整数，等于把下限钉死在 1 分钟，想冷却 30 秒就做不到。
+	 */
+	cooldownSeconds: number;
 	judgeProviderId: string;
 	judgeModelId: string;
 };
@@ -203,7 +208,7 @@ export function createDefaultConfig(): AppConfig {
 			quietEnd: "00:00",
 			notifyOnLimit: false,
 			aggregationSeconds: 8,
-			cooldownMinutes: 10,
+			cooldownSeconds: 600,
 			judgeProviderId: "",
 			judgeModelId: "",
 		},

@@ -41,8 +41,8 @@ export async function handleProactiveRoutes(
 			input.aggregationSeconds === undefined
 				? config.proactiveGate.aggregationSeconds
 				: Number(input.aggregationSeconds);
-		const cooldownMinutes =
-			input.cooldownMinutes === undefined ? config.proactiveGate.cooldownMinutes : Number(input.cooldownMinutes);
+		const cooldownSeconds =
+			input.cooldownSeconds === undefined ? config.proactiveGate.cooldownSeconds : Number(input.cooldownSeconds);
 		const probabilityPercent =
 			input.probabilityPercent === undefined
 				? config.proactiveGate.probabilityPercent
@@ -53,15 +53,16 @@ export async function handleProactiveRoutes(
 			json(res, 400, { ok: false, message: "每日消息上限需为 0 到 100000 的整数" });
 			return true;
 		}
+		// 两个时间参数都不设下限：0 就是「不聚合 / 不冷却」，想 1 秒聚合、10 秒冷却都该允许。
 		if (
 			!Number.isInteger(aggregationSeconds) ||
-			aggregationSeconds < 3 ||
+			aggregationSeconds < 0 ||
 			aggregationSeconds > 60 ||
-			!Number.isInteger(cooldownMinutes) ||
-			cooldownMinutes < 0 ||
-			cooldownMinutes > 1440
+			!Number.isInteger(cooldownSeconds) ||
+			cooldownSeconds < 0 ||
+			cooldownSeconds > 86_400
 		) {
-			json(res, 400, { ok: false, message: "聚合窗口需为 3 到 60 秒，冷却需为 0 到 1440 分钟" });
+			json(res, 400, { ok: false, message: "聚合窗口需为 0 到 60 秒，冷却需为 0 到 86400 秒" });
 			return true;
 		}
 		if (!Number.isInteger(probabilityPercent) || probabilityPercent < 1 || probabilityPercent > 100) {
@@ -104,7 +105,7 @@ export async function handleProactiveRoutes(
 			notifyOnLimit:
 				input.notifyOnLimit === undefined ? config.proactiveGate.notifyOnLimit : input.notifyOnLimit === true,
 			aggregationSeconds,
-			cooldownMinutes,
+			cooldownSeconds,
 			judgeProviderId,
 			judgeModelId,
 		};

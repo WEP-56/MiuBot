@@ -5,7 +5,13 @@ import type { AppState } from "../app-state.ts";
 import type { CommandDispatcher, CommandRegistry } from "../commands/index.ts";
 import { parseCommand } from "../commands/index.ts";
 import type { LogLevel } from "../logging.ts";
-import { downloadImage, prepareInboundMedia } from "../media.ts";
+import {
+	describeMediaAttachments,
+	downloadImage,
+	prepareInboundMedia,
+	quoteMediaAttachments,
+	toMediaAttachments,
+} from "../media.ts";
 import { peerKey } from "../peer-key.ts";
 import { normalizeMessageEvent } from "../platform/events.ts";
 import { acceptInboundMessage, describeQuoteContext } from "../platform/inbound.ts";
@@ -94,7 +100,9 @@ export function createInboundHandler(deps: {
 		);
 		const peerName = peerConfig.name;
 		const hasAttachments = normalized.attachments.length > 0;
-		if (!text && !hasAttachments) return;
+		const attachments = toMediaAttachments(normalized.attachments);
+		// 只有引用、没有正文也没有附件的消息同样有意义（例如引用一张图片问「这是什么」）。
+		if (!text && !hasAttachments && !normalized.quote) return;
 		await state.savePeers();
 		stickerTagging.notifyConversationActivity();
 		void platform.eventBus.emit(normalizeMessageEvent(botConfig.id, message));
@@ -154,17 +162,7 @@ export function createInboundHandler(deps: {
 		const collectProbability =
 			tools.stickersEnabled && peerConfig.useTools !== false ? tools.stickerAutoCollectProbability : 0;
 		if (collectProbability > 0 && normalized.attachments.length) {
-			void collectInboundStickers(
-				normalized.attachments.map((attachment) => ({
-					kind: attachment.kind === "image" ? ("image" as const) : ("file" as const),
-					url: attachment.url,
-					mimeType: attachment.mimeType,
-					...(attachment.fileName ? { fileName: attachment.fileName } : {}),
-				})),
-				collectProbability,
-				stickerStore,
-				{ download: downloadImage },
-			)
+			void collectInboundStickers(attachments, collectProbability, stickerStore, { download: downloadImage })
 				.then((result) => {
 					if (result.imported || result.duplicates || result.failed)
 						log(
@@ -178,13 +176,16 @@ export function createInboundHandler(deps: {
 				);
 		}
 		if (isGroup && !mentioned) {
+			const quoteContext = describeQuoteContext(normalized.quote);
 			proactive.queueGroupMessage(
 				bot,
 				botConfig,
 				peerId,
 				normalized.senderName || senderId,
 				senderId,
-				text || (hasAttachments ? "[收到附件消息]" : ""),
+				[text || describeMediaAttachments(attachments), quoteContext].filter(Boolean).join("\n"),
+				// 附件一起进聚合窗口：插话命中图片时要真的把图片交给模型，而不只是「收到附件」。
+				[...attachments, ...(normalized.quote ? quoteMediaAttachments(normalized.quote) : [])],
 			);
 			return;
 		}
@@ -211,12 +212,15 @@ export function createInboundHandler(deps: {
 			const config = state.getConfig();
 			const provider = config.providers.find((item) => item.id === session.providerId);
 			const modelConfig = provider?.models.find((item) => item.id === session.modelId);
-			const media = await prepareInboundMedia(message, { supportsVision: modelConfig?.supportsVision === true });
+			const media = await prepareInboundMedia(message, {
+				supportsVision: modelConfig?.supportsVision === true,
+				...(normalized.quote ? { quote: normalized.quote } : {}),
+			});
 			const quoteContext = describeQuoteContext(normalized.quote);
 			const prompt =
 				[text, quoteContext, media.context].filter(Boolean).join("\n\n") ||
 				(media.images.length > 0 ? "请查看并描述这张图片。" : "请处理这条附件消息。");
-			const persistedContent = [
+			const persistedBody = [
 				text,
 				...media.attachments.map(
 					(attachment) => `[${attachment.kind}: ${attachment.fileName ?? attachment.mimeType}]`,
@@ -224,6 +228,8 @@ export function createInboundHandler(deps: {
 			]
 				.filter(Boolean)
 				.join("\n");
+			// 只有引用的消息没有正文，但会话历史里不能留一条空消息。
+			const persistedContent = persistedBody || (normalized.quote ? "[引用消息]" : "");
 			const senderName = normalized.senderName || (isGroup ? senderId : peerName);
 			const senderLabel = `${senderName}（平台用户 ID/OpenID: ${senderId}）`;
 			session.messages.push({

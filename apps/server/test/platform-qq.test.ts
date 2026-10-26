@@ -74,16 +74,25 @@ describe("inbound acceptance", () => {
 });
 
 describe("quote context", () => {
-	it("renders nothing without a quote and describes attachment counts", () => {
+	it("renders nothing without a quote and names the quoted attachments", () => {
 		expect(describeQuoteContext(undefined)).toBe("");
+		const audio = describeQuoteContext({
+			source: "msg_elements",
+			refMsgIdx: "ref-1",
+			text: "帮我画一只猫",
+			attachments: [{ contentType: "audio/silk", url: "https://cdn.example/v.silk" }],
+		});
+		expect(audio).toContain("帮我画一只猫");
+		expect(audio).toContain("语音 audio/silk");
+		// 只写「含 1 个附件」等于没说：模型无从判断被引用的是图片、语音还是文件。
 		expect(
 			describeQuoteContext({
 				source: "msg_elements",
 				refMsgIdx: "ref-1",
-				text: "帮我画一只猫",
-				attachments: [{ contentType: "audio/silk", url: "https://cdn.example/v.silk" }],
+				text: "",
+				attachments: [{ contentType: "image/png", url: "https://cdn.example/a.png", fileName: "a.png" }],
 			}),
-		).toContain("帮我画一只猫");
+		).toContain("被引用消息的附件：图片 a.png");
 		expect(
 			describeQuoteContext({ source: "msg_elements", refMsgIdx: "ref-1", text: "", attachments: [] }),
 		).toContain("(被引用消息没有文本)");

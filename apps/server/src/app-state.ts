@@ -1,7 +1,13 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { PeerConfig, RuntimeSession } from "./agent-host.ts";
-import { type AppConfig, createDefaultConfig, type ModelConfig, type ProviderConfig } from "./runtime.ts";
+import {
+	type AppConfig,
+	createDefaultConfig,
+	type ModelConfig,
+	type ProactiveGateSettings,
+	type ProviderConfig,
+} from "./runtime.ts";
 import { restrictFileMode, writeJsonAtomic } from "./storage.ts";
 
 export type ProactiveUsage = { date: string; sent: number };
@@ -30,6 +36,24 @@ export type AppState = {
 	setProactiveUsage(next: ProactiveUsage): void;
 	saveProactiveUsage(): Promise<void>;
 };
+
+/**
+ * 主动行为闸门的兼容处理。
+ *
+ * 群级冷却曾经以分钟为单位（`cooldownMinutes`），取整等于「最小 1 分钟」；现在统一按秒存。
+ * 旧配置必须 ×60 迁移，否则升级后冷却会突然变成 0 秒——等于悄悄取消了这个保护。
+ */
+function migrateProactiveGate(
+	defaults: ProactiveGateSettings,
+	saved: (Partial<ProactiveGateSettings> & { cooldownMinutes?: number }) | undefined,
+): ProactiveGateSettings {
+	if (!saved) return defaults;
+	const { cooldownMinutes, ...rest } = saved;
+	const gate: ProactiveGateSettings = { ...defaults, ...rest };
+	if (typeof rest.cooldownSeconds !== "number" && typeof cooldownMinutes === "number")
+		gate.cooldownSeconds = Math.max(0, cooldownMinutes) * 60;
+	return gate;
+}
 
 /**
  * 运行时内存状态及其持久化。
@@ -177,7 +201,7 @@ export function createAppState(options: { dataDir: string }): AppState {
 						? current.access.allowedPeers.filter((key): key is string => typeof key === "string")
 						: defaults.access.allowedPeers,
 				},
-				proactiveGate: { ...defaults.proactiveGate, ...current.proactiveGate },
+				proactiveGate: migrateProactiveGate(defaults.proactiveGate, current.proactiveGate),
 				mcpServers: Array.isArray(current.mcpServers) ? current.mcpServers : defaults.mcpServers,
 				plugins: {
 					enabled: Array.isArray(current.plugins?.enabled)

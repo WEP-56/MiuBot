@@ -153,10 +153,34 @@ export function normalizeInboundMessage(
 	};
 }
 
-/** 引用消息的 Prompt 片段；没有引用时返回空串，便于调用方直接过滤。 */
+function quoteAttachmentLabel(contentType: string): string {
+	const kind = mediaKind(contentType.toLowerCase());
+	if (kind === "image") return "图片";
+	if (kind === "audio") return "语音";
+	if (kind === "video") return "视频";
+	return "文件";
+}
+
+/**
+ * 引用消息的 Prompt 片段；没有引用时返回空串，便于调用方直接过滤。
+ *
+ * 附件要写清楚类型与文件名：只报「含 1 个附件」等于什么都没说，模型无从判断引用的是图片、
+ * 语音还是文件。被引用图片的像素由 `prepareInboundMedia` 作为附图一并送入模型。
+ */
 export function describeQuoteContext(quote: QuotedMessage | undefined): string {
 	if (!quote) return "";
-	return `本条消息引用了更早的一条消息${quote.attachments.length ? `（含 ${quote.attachments.length} 个附件）` : ""}，被引用内容：\n${quote.text || "(被引用消息没有文本)"}`;
+	const lines = ["本条消息引用了更早的一条消息，被引用内容：", quote.text || "(被引用消息没有文本)"];
+	if (quote.attachments.length > 0) {
+		const attachments = quote.attachments.map((attachment) => {
+			const label = quoteAttachmentLabel(attachment.contentType);
+			const name = attachment.fileName ?? attachment.contentType;
+			return attachment.transcript
+				? `${label} ${name}（语音识别文本：${attachment.transcript}）`
+				: `${label} ${name}`;
+		});
+		lines.push(`被引用消息的附件：${attachments.join("；")}`);
+	}
+	return lines.join("\n");
 }
 
 export type InboundAcceptance =

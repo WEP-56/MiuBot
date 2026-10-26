@@ -2,6 +2,7 @@ import type { QQBot } from "@tencent-connect/qqbot-nodejs";
 import type { AgentHost } from "./agent-host.ts";
 import type { AppState } from "./app-state.ts";
 import type { LogLevel } from "./logging.ts";
+import { type MediaAttachment, prepareMediaAttachments } from "./media.ts";
 import type { createQqPlatform } from "./platform/runtime.ts";
 import { type AppConfig, createChatCompletion, evaluateProactiveGate, type QqBotConfig } from "./runtime.ts";
 import { sessionPromptContexts, stickerSendContexts } from "./session-context.ts";
@@ -37,6 +38,7 @@ export type ProactiveRuntime = {
 		sender: string,
 		senderId: string,
 		content: string,
+		attachments: MediaAttachment[],
 	): void;
 	/** 群里 @ 了 Bot：取消待发窗口，避免插话与正式回复撞车。 */
 	cancelPendingWindow(botId: string, groupId: string): void;
@@ -44,11 +46,19 @@ export type ProactiveRuntime = {
 	markGroupReplied(botId: string, groupId: string): void;
 };
 
+type WindowMessage = {
+	sender: string;
+	senderId: string;
+	content: string;
+	/** 消息自带的附件：插话时图片要真正交给模型，不能只留一句「收到附件」。 */
+	attachments: MediaAttachment[];
+};
+
 type ReplyWindow = {
 	bot: QQBot;
 	botConfig: QqBotConfig;
 	groupId: string;
-	messages: Array<{ sender: string; senderId: string; content: string }>;
+	messages: WindowMessage[];
 	timer: ReturnType<typeof setTimeout>;
 };
 
@@ -138,7 +148,7 @@ export function createProactive(deps: {
 		if (!(await checkGate(groupId, true))) return;
 		const cooldownKey = `${botConfig.id}:group:${groupId}`;
 		const lastReply = cooldowns.get(cooldownKey) ?? 0;
-		if (Date.now() - lastReply < config().proactiveGate.cooldownMinutes * 60_000) {
+		if (Date.now() - lastReply < config().proactiveGate.cooldownSeconds * 1000) {
 			metrics.blocked++;
 			record({
 				time: new Date().toISOString(),
@@ -257,12 +267,18 @@ export function createProactive(deps: {
 			!currentPeerConfig?.features.activeReply ||
 			!session.active ||
 			!(await checkGate(groupId, true)) ||
-			Date.now() - (cooldowns.get(cooldownKey) ?? 0) < config().proactiveGate.cooldownMinutes * 60_000
+			Date.now() - (cooldowns.get(cooldownKey) ?? 0) < config().proactiveGate.cooldownSeconds * 1000
 		) {
 			log("INFO", `智能插话发送前复核拦截：${groupId}`, session.id);
 			return;
 		}
-		const prompt = `群聊话题：${decision.topic ?? "最近讨论"}\n以下是刚刚聚合到的群聊消息：\n${transcript}\n请自然、简洁地参与讨论。不要提及你在分析是否插话，也不要复述整段消息。`;
+		const sessionProvider = config().providers.find((item) => item.id === session.providerId);
+		const sessionModel = sessionProvider?.models.find((item) => item.id === session.modelId);
+		const media = await prepareMediaAttachments(
+			messages.flatMap((message) => message.attachments),
+			{ supportsVision: sessionModel?.supportsVision === true },
+		);
+		const prompt = `群聊话题：${decision.topic ?? "最近讨论"}\n以下是刚刚聚合到的群聊消息：\n${transcript}\n${media.context ? `${media.context}\n` : ""}请自然、简洁地参与讨论。不要提及你在分析是否插话，也不要复述整段消息。`;
 		try {
 			const agentSession = await agentHost.getAgentSession(session);
 			stickerSendContexts.set(session.id, {
@@ -275,7 +291,7 @@ export function createProactive(deps: {
 				`本次待处理群消息包含以下发言人及平台 ID：\n${messages.map((message) => `${message.sender}（${message.senderId}）`).join("\n")}`,
 			);
 			try {
-				await agentSession.prompt(prompt);
+				await agentSession.prompt(prompt, media.images.length > 0 ? { images: media.images } : undefined);
 			} finally {
 				stickerSendContexts.delete(session.id);
 				sessionPromptContexts.delete(session.id);
@@ -335,7 +351,7 @@ export function createProactive(deps: {
 		metrics,
 		decisions,
 		sentToday: () => (state.getProactiveUsage().date === localDateKey() ? state.getProactiveUsage().sent : 0),
-		queueGroupMessage(bot, botConfig, groupId, sender, senderId, content) {
+		queueGroupMessage(bot, botConfig, groupId, sender, senderId, content, attachments) {
 			const peerConfig = state.getPeerConfig("group", groupId, botConfig.id);
 			metrics.groupMessagesReceived++;
 			log(
@@ -352,7 +368,7 @@ export function createProactive(deps: {
 			const key = `${botConfig.id}:group:${groupId}`;
 			const existing = windows.get(key);
 			if (existing) {
-				existing.messages.push({ sender, senderId, content: content.slice(0, 500) });
+				existing.messages.push({ sender, senderId, content: content.slice(0, 500), attachments });
 				if (existing.messages.length > 12) existing.messages.shift();
 				return;
 			}
@@ -360,7 +376,7 @@ export function createProactive(deps: {
 				bot,
 				botConfig,
 				groupId,
-				messages: [{ sender, senderId, content: content.slice(0, 500) }],
+				messages: [{ sender, senderId, content: content.slice(0, 500), attachments }],
 				timer: setTimeout(() => {
 					void enqueueForTarget(key, () => evaluateWindow(key));
 				}, config().proactiveGate.aggregationSeconds * 1000),
