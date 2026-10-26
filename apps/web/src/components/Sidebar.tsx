@@ -86,15 +86,11 @@ export function Sidebar({ current, onChange }: SidebarProps) {
     <aside className="w-[210px] shrink-0 h-full flex flex-col py-5 px-3 bg-black select-none">
       {/* 上半区：可滚动。导航项会随功能增加而变长，小屏下必须能滚，否则会把下半区顶出屏幕。 */}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="flex items-center justify-between px-2 mb-6">
+        <div className="flex items-center px-2 mb-6">
           <div className="flex items-center gap-2.5">
             <Icon.BotFace size={20} className="text-white" />
-            <div className="leading-tight">
-              <div className="text-[16px] font-bold text-white tracking-tight">Miubot</div>
-              <div className="text-[11.5px] text-[#777777] font-normal">Agent Workspace</div>
-            </div>
+            <div className="text-[16px] font-bold text-white tracking-tight">Miubot</div>
           </div>
-          <span className="pill-green !text-[11px] !py-[2px] !px-2">运行中</span>
         </div>
 
         {/* Navigation items */}
