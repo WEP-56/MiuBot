@@ -178,11 +178,13 @@ describe("/api/peer-config 细粒度配置", () => {
 			fallbackProviderId: "p1",
 			fallbackModelId: "m2",
 			toolsOverride: ["web_search", "web_search"],
+			features: { activeReply: false, showToolActivity: true },
 		});
 
 		expect(status).toBe(200);
 		const saved = body.config as PeerConfig;
 		expect(saved.fallbackModelId).toBe("m2");
+		expect(saved.features.showToolActivity).toBe(true);
 		// 去重后落盘。
 		expect(saved.toolsOverride).toEqual(["web_search"]);
 		expect(h.peers[0]?.fallbackModelId).toBe("m2");

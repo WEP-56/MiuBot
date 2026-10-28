@@ -23,7 +23,7 @@ export function isNativeTool(name: string): boolean {
 }
 
 /** 有独立开关、但也在 `config.tools.enabled` 列表里的工具。 */
-export const configurableToolNames = ["web_search", "image_gen"] as const;
+export const configurableToolNames = ["web_search", "image_gen", "schedule_task", "time"] as const;
 
 /** 工作台「Tools」页可勾选的全部工具名（`PUT /api/tools` 的白名单）。 */
 export const toolNames: string[] = [...nativeToolNames, ...configurableToolNames];

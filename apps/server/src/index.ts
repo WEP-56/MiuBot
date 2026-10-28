@@ -25,9 +25,12 @@ import { createQqPlatform } from "./platform/runtime.ts";
 import { createProactive } from "./proactive.ts";
 import { createQqConnection, type QqConnection } from "./qq/connection.ts";
 import { createInboundHandler } from "./qq/inbound.ts";
+import { createScheduler } from "./scheduler.ts";
 import { sessionPromptContexts, stickerSendContexts } from "./session-context.ts";
 import { createStickerTagging } from "./sticker-tagging.ts";
 import { StickerStore } from "./stickers.ts";
+import { enqueueForTarget } from "./target-queue.ts";
+import { toolDisplayName } from "./tool-display.ts";
 import { auxiliaryToolNames, isNativeTool, toolNames } from "./tool-names.ts";
 import { createUpdateChecker } from "./update-check.ts";
 import { resolveVersion } from "./version.ts";
@@ -167,6 +170,84 @@ const builtinCommands = createBuiltinCommands({
  * `connection` 仍需留声明：平台与插件桥的回调只在运行时才用到它。
  */
 let connection: QqConnection;
+let agentHost: ReturnType<typeof createAgentHost>;
+const scheduler = createScheduler({
+	dataDir,
+	getSession: (id) => state.getSessions().find((session) => session.id === id),
+	getAllowedTools: (id) => {
+		const session = state.getSessions().find((item) => item.id === id);
+		return session && agentHost ? agentHost.activeToolsForSession(session) : [];
+	},
+	execute: async (task) => {
+		const session = state.getSessions().find((item) => item.id === task.sessionId);
+		if (!session) throw new Error("绑定的会话不存在");
+		const bot = connection.client(session.botId);
+		if (!bot) throw new Error("绑定会话的 QQ Bot 未连接");
+		await enqueueForTarget(`${session.botId}:${session.scope}:${session.peerId}`, async () => {
+			const channel = platform.channelFor(bot);
+			const target = { scope: session.scope, targetId: session.peerId };
+			const agentSession = await agentHost.getAgentSession(session);
+			const previousTools = agentSession.getActiveToolNames();
+			agentSession.setActiveToolsByName(
+				task.allowedTools.filter((name) => agentHost.activeToolsForSession(session).includes(name)),
+			);
+			sessionPromptContexts.set(session.id, `这是定时任务「${task.name}」的执行。按任务 Prompt 完成工作。`);
+			stickerSendContexts.set(session.id, { bot, target, channel });
+			session.messages.push({
+				role: "user",
+				content: `【定时任务：${task.name}】${task.prompt}`,
+				timestamp: new Date().toISOString(),
+			});
+			await state.saveSessions();
+			const answers: string[] = [];
+			const peer = state.getPeerConfig(session.scope, session.peerId, session.botId);
+			let deliveryQueue = Promise.resolve();
+			const unsubscribe = agentSession.subscribe((event) => {
+				if (event.type === "message_end" && event.message.role === "assistant") {
+					const text = event.message.content
+						.flatMap((part) => (part.type === "text" ? [part.text] : []))
+						.join("\n")
+						.trim();
+					if (text) answers.push(text);
+				}
+				if (event.type === "tool_execution_start" && peer?.features.showToolActivity)
+					deliveryQueue = deliveryQueue
+						.then(async () => {
+							await channel.sendText(target, `正在使用「${toolDisplayName(event.toolName)}」…`);
+						})
+						.catch((error: unknown) => log("WARN", `定时任务 Tool 状态发送失败：${String(error)}`, session.id));
+				if (event.type === "tool_execution_end" && peer?.features.showToolActivity) {
+					const duration = event.durationMs === undefined ? "" : `（${(event.durationMs / 1000).toFixed(1)} 秒）`;
+					deliveryQueue = deliveryQueue
+						.then(async () => {
+							await channel.sendText(
+								target,
+								`「${toolDisplayName(event.toolName)}」${event.isError ? "执行失败" : "执行成功"}${duration}`,
+							);
+						})
+						.catch((error: unknown) => log("WARN", `定时任务 Tool 状态发送失败：${String(error)}`, session.id));
+				}
+			});
+			try {
+				await agentSession.prompt(task.prompt);
+				await deliveryQueue;
+				for (const answer of answers) {
+					session.messages.push({ role: "assistant", content: answer, timestamp: new Date().toISOString() });
+					await state.saveSessions();
+					await channel.sendText(target, answer);
+				}
+				session.updatedAt = new Date().toISOString();
+				await state.saveSessions();
+			} finally {
+				unsubscribe();
+				agentSession.setActiveToolsByName(previousTools);
+				sessionPromptContexts.delete(session.id);
+				stickerSendContexts.delete(session.id);
+			}
+		});
+	},
+	log,
+});
 const platform = createQqPlatform({
 	onEventError: (error, type, eventType) =>
 		log(
@@ -232,7 +313,7 @@ const commandRegistry = createCommandRegistry({
 	isDisabled: (name) => state.getConfig().commands.disabled.includes(name),
 });
 
-const agentHost = createAgentHost({
+agentHost = createAgentHost({
 	dataDir,
 	agentDir,
 	getConfig: state.getConfig,
@@ -248,6 +329,7 @@ const agentHost = createAgentHost({
 	pluginExtensions: pluginHost.extensions,
 	disableNativeTools,
 	log: (level, text) => log(level, text),
+	createScheduledTask: (sessionId, input) => scheduler.createTask({ ...input, sessionId }),
 });
 const stickerTagging = createStickerTagging({
 	getConfig: state.getConfig,
@@ -340,6 +422,7 @@ const httpContext: HttpContext = {
 	stickers: { store: stickerStore, scheduleTagging: stickerTagging.schedule, resetTagging: stickerTagging.reset },
 	commands: { list: commandRegistry.list },
 	proactive: { metrics: proactive.metrics, decisions: proactive.decisions, sentToday: proactive.sentToday },
+	scheduler,
 	qq: {
 		states: connection.states,
 		qr: connection.qr,
@@ -354,6 +437,7 @@ const httpContext: HttpContext = {
 };
 
 await state.load();
+await scheduler.load();
 await logger.load();
 stickerTagging.schedule(10_000);
 mcpRuntime.setGlobalToolsEnabled(state.getConfig().tools.mcpEnabled);
@@ -382,6 +466,7 @@ const activePluginCount = pluginHost.list().filter((plugin) => plugin.state === 
 log("INFO", `插件加载完成：${activePluginCount}/${discoveredPlugins.length} 个启用`);
 
 const activeBot = state.getConfig().qqBots.find((bot) => bot.enabled);
+scheduler.start();
 if (activeBot?.appId && activeBot.appSecret) void connection.connect(activeBot);
 
 log("INFO", `Miubot ${version}`);
@@ -438,6 +523,7 @@ async function shutdown(signal: string): Promise<void> {
 	shuttingDown = true;
 	log("INFO", `收到 ${signal}，正在退出`);
 	for (const bot of state.getConfig().qqBots) connection.stop(bot.id);
+	scheduler.stop();
 	await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
 	log("INFO", "Miubot Server 已停止");
 	// 最后一行日志也要落盘：flush 放在「已停止」之后。

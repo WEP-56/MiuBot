@@ -10,6 +10,15 @@ import {
 } from "./runtime.ts";
 import { restrictFileMode, writeJsonAtomic } from "./storage.ts";
 
+function isValidTimeZone(value: string): boolean {
+	try {
+		new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 export type ProactiveUsage = { date: string; sent: number };
 
 export type AppState = {
@@ -115,7 +124,7 @@ export function createAppState(options: { dataDir: string }): AppState {
 			fallbackModelId: "",
 			useTools: true,
 			toolsOverride: null,
-			features: { activeReply: false },
+			features: { activeReply: false, showToolActivity: false },
 		};
 	}
 
@@ -194,6 +203,10 @@ export function createAppState(options: { dataDir: string }): AppState {
 								? savedTools.imageGen.providerId
 								: legacyImageProviderId,
 					},
+					timezone:
+						typeof savedTools?.timezone === "string" && isValidTimeZone(savedTools.timezone)
+							? savedTools.timezone
+							: defaults.tools.timezone,
 				},
 				imageProviders,
 				access: {
@@ -267,6 +280,7 @@ export function createAppState(options: { dataDir: string }): AppState {
 					summary: session.summary ?? "",
 					compactedThrough: session.compactedThrough ?? 0,
 					messages: session.messages ?? [],
+					activities: session.activities ?? [],
 				};
 			});
 		} catch {
@@ -304,6 +318,10 @@ export function createAppState(options: { dataDir: string }): AppState {
 								typeof item.features === "object" &&
 								item.features !== null &&
 								(item.features as { activeReply?: unknown }).activeReply === true,
+							showToolActivity:
+								typeof item.features === "object" &&
+								item.features !== null &&
+								(item.features as { showToolActivity?: unknown }).showToolActivity === true,
 						},
 					}))
 				: [];
@@ -330,7 +348,7 @@ export function createAppState(options: { dataDir: string }): AppState {
 					fallbackModelId: "",
 					useTools: true,
 					toolsOverride: null,
-					features: { activeReply: false },
+					features: { activeReply: false, showToolActivity: false },
 				});
 			}
 		}
@@ -393,6 +411,7 @@ export function createAppState(options: { dataDir: string }): AppState {
 				summary: "",
 				compactedThrough: 0,
 				messages: [],
+				activities: [],
 				createdAt: now,
 				updatedAt: now,
 				active: true,

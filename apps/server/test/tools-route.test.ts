@@ -81,8 +81,12 @@ describe("/api/tools 的图像提供商选择", () => {
 		const h = harness();
 		const { status, body } = await h.call("GET");
 		const imageGen = body.imageGen as ImageGenPayload;
+		const tools = body.tools as Array<{ name: string }>;
 
 		expect(status).toBe(200);
+		expect(tools.map((tool) => tool.name)).toContain("schedule_task");
+		expect(tools.map((tool) => tool.name)).toContain("time");
+		expect(body.timezone).toBe("Asia/Shanghai");
 		expect(imageGen.providerId).toBe("");
 		expect(imageGen.providers.map((item) => item.id)).toEqual(["img-a", "img-b"]);
 		expect(imageGen.providers.find((item) => item.id === "img-a")?.apiKeyConfigured).toBe(true);
@@ -135,5 +139,20 @@ describe("/api/tools 的图像提供商选择", () => {
 		const { status, body } = await h.call("PUT", { ...h.base, imageGen: { providerId: "img-a" } });
 		expect(status).toBe(400);
 		expect(String(body.message)).toContain("已停用");
+	});
+
+	it("接受并保存有效时区", async () => {
+		const h = harness();
+		const { status, body } = await h.call("PUT", { ...h.base, timezone: "America/New_York" });
+		expect(status).toBe(200);
+		expect(body.timezone).toBe("America/New_York");
+		expect(h.config().tools.timezone).toBe("America/New_York");
+	});
+
+	it("拒绝无效时区", async () => {
+		const h = harness();
+		const { status, body } = await h.call("PUT", { ...h.base, timezone: "Mars/Olympus" });
+		expect(status).toBe(400);
+		expect(String(body.message)).toContain("时区无效");
 	});
 });

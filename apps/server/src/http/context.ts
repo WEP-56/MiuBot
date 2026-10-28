@@ -14,6 +14,7 @@ import type { RuntimeLog } from "../logging.ts";
 import type { ProactiveDecision, ProactiveMetrics } from "../proactive.ts";
 import type { QqConnectionState, QrState } from "../qq/connection.ts";
 import type { AppConfig, QqBotConfig } from "../runtime.ts";
+import type { Scheduler } from "../scheduler.ts";
 import type { StickerStore } from "../stickers.ts";
 import type { UpdateChecker } from "../update-check.ts";
 
@@ -118,6 +119,7 @@ export type HttpContext = {
 		decisions: ProactiveDecision[];
 		sentToday(): number;
 	};
+	scheduler: Scheduler;
 	qq: {
 		states: Map<string, QqConnectionState>;
 		qr(): QrState;

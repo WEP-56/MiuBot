@@ -158,7 +158,10 @@ export async function handleSessionRoutes(
 			fallbackModelId,
 			useTools: input.useTools !== false,
 			toolsOverride,
-			features: { activeReply: rawFeatures.activeReply === true },
+			features: {
+				activeReply: rawFeatures.activeReply === true,
+				showToolActivity: rawFeatures.showToolActivity === true,
+			},
 		};
 		const index = ctx.peers
 			.get()

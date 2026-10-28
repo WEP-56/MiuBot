@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { InlineExtension, ToolDefinition } from "@miubot/plugin/extensions/types";
-import { createBuiltinTools, type McpRuntime } from "@miubot/plugin/tools/index";
+import { type CreateScheduledTaskInput, createBuiltinTools, type McpRuntime } from "@miubot/plugin/tools/index";
 import { generateOpenAIImage } from "@miubot/provider";
 import type { AgentSession } from "@miubot/session/agent-session";
 import { ModelRuntime } from "@miubot/session/model-runtime";
@@ -16,6 +16,14 @@ import { extensionForMime, type Sticker, type StickerStore } from "./stickers.ts
 import { isNativeTool, toolNames } from "./tool-names.ts";
 
 export type RuntimeMessage = { role: "user" | "assistant"; content: string; sender?: string; timestamp: string };
+export type RuntimeActivity = {
+	id: string;
+	kind: "tool";
+	label: string;
+	status: "running" | "success" | "error";
+	timestamp: string;
+	durationMs?: number;
+};
 export type RuntimeSession = {
 	id: string;
 	scope: "group" | "c2c";
@@ -31,6 +39,7 @@ export type RuntimeSession = {
 	summary: string;
 	compactedThrough: number;
 	messages: RuntimeMessage[];
+	activities?: RuntimeActivity[];
 	createdAt: string;
 	updatedAt: string;
 	active: boolean;
@@ -61,7 +70,7 @@ export type PeerConfig = {
 	 * 仍由各自的开关决定，不跟着这个清单走。
 	 */
 	toolsOverride: string[] | null;
-	features: { activeReply: boolean };
+	features: { activeReply: boolean; showToolActivity?: boolean };
 };
 
 /** 插件注册的 Agent Tool；由 PluginHost 提供，按会话所属 Bot 过滤。 */
@@ -98,6 +107,10 @@ type AgentHostDependencies = {
 	disableNativeTools?: boolean;
 	/** 运行日志；用于把扩展装载失败等原因暴露出来，而不是让它静默消失。 */
 	log?: (level: "INFO" | "WARN" | "ERROR", text: string) => void;
+	createScheduledTask?: (
+		sessionId: string,
+		input: CreateScheduledTaskInput,
+	) => Promise<{ id: string; nextRunAt: string }>;
 };
 
 export function createAgentHost(deps: AgentHostDependencies) {
@@ -229,6 +242,7 @@ export function createAgentHost(deps: AgentHostDependencies) {
 		}
 		const customTools: ToolDefinition[] = createBuiltinTools({
 			webSearch: () => config().tools.webSearch,
+			timezone: () => config().tools.timezone,
 			...(current.tools.skillsEnabled ? { skills: { cwd: deps.dataDir, agentDir: deps.agentDir } } : {}),
 			...(current.tools.stickersEnabled
 				? {
@@ -290,6 +304,15 @@ export function createAgentHost(deps: AgentHostDependencies) {
 				},
 			},
 			mcp: deps.mcpRuntime,
+			...(deps.createScheduledTask
+				? {
+						scheduleTask: {
+							createTask: (input: CreateScheduledTaskInput) =>
+								deps.createScheduledTask!(runtimeSession.id, input),
+							allowedTools: () => enabledToolNames(runtimeSession).filter((name) => name !== "schedule_task"),
+						},
+					}
+				: {}),
 		});
 		// 会话级注入：插件工具与内置工具走同一条 `customTools` 通道，由 session 统一包装。
 		// 每次创建会话都重新取——插件在那之后启停会触发 `rebuildAgentSessions()`。
@@ -392,6 +415,9 @@ export function createAgentHost(deps: AgentHostDependencies) {
 		applyToolSettings,
 		rebuildAgentSessions,
 		getAgentSession,
+		activeToolsForSession(session: RuntimeSession): string[] {
+			return enabledToolNames(session).filter((name) => name !== "schedule_task");
+		},
 		anyAgentLoopRunning,
 		disposeSession,
 		disposePeer,

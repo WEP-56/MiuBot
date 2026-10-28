@@ -11,6 +11,7 @@ import { handlePluginRoutes } from "./routes/plugins.ts";
 import { handleProactiveRoutes } from "./routes/proactive.ts";
 import { handleProviderRoutes } from "./routes/providers.ts";
 import { handleQqBotRoutes } from "./routes/qqbot.ts";
+import { handleSchedulerRoutes } from "./routes/scheduler.ts";
 import { handleSessionRoutes } from "./routes/sessions.ts";
 import { handleSkillRoutes } from "./routes/skills.ts";
 import { handleStickerRoutes } from "./routes/stickers.ts";
@@ -34,6 +35,7 @@ const handlers: RouteHandler[] = [
 	handleOverviewRoutes,
 	handleProactiveRoutes,
 	handleStickerRoutes,
+	handleSchedulerRoutes,
 	handleSkillRoutes,
 	handlePersonaRoutes,
 	handleSessionRoutes,

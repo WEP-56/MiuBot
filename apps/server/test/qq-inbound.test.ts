@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { QQBot, QQBotInboundMessage } from "@tencent-connect/qqbot-nodejs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentHost } from "../src/agent-host.ts";
+import type { AgentSessionEvent } from "@miubot/session/agent-session";
 import { createAppState } from "../src/app-state.ts";
 import { createBuiltinCommands, createCommandDispatcher, createCommandRegistry } from "../src/commands/index.ts";
 import { createMessageDeduplicator } from "../src/platform/inbound.ts";
@@ -86,6 +87,7 @@ describe("QQ inbound pipeline", () => {
 			});
 		}
 		const prompts: string[] = [];
+		let eventListener: ((event: AgentSessionEvent) => void) | undefined;
 		const agentSession = {
 			prompt: vi.fn(async (text: string) => {
 				prompts.push(text);
@@ -93,7 +95,12 @@ describe("QQ inbound pipeline", () => {
 				agentSession.messages.push({ role: "assistant", stopReason: "stop", content: [] });
 			}),
 			messages: [] as Array<Record<string, unknown>>,
-			subscribe: vi.fn(() => () => {}),
+			subscribe: vi.fn((listener: (event: AgentSessionEvent) => void) => {
+				eventListener = listener;
+				return () => {
+					eventListener = undefined;
+				};
+			}),
 			getLastAssistantText: () => "收到啦",
 			model: { provider: "p", id: "m" },
 			setModel: vi.fn(async () => {}),
@@ -106,9 +113,25 @@ describe("QQ inbound pipeline", () => {
 			anyAgentLoopRunning: () => false,
 		} as unknown as AgentHost;
 		const sendText = vi.fn<(target: unknown, text: string) => Promise<void>>(async () => {});
+		const streamUpdates: string[][] = [];
+		const streamCompletions: number[] = [];
+		const openStream = vi.fn(() => {
+			const updates: string[] = [];
+			streamUpdates.push(updates);
+			return {
+				supported: true,
+				update: async (text: string) => {
+					updates.push(text);
+				},
+				complete: async () => {
+					streamCompletions.push(1);
+				},
+				cancel: () => {},
+			};
+		});
 		const channel = {
 			sendText,
-			openStream: () => ({ supported: false, update: async () => {}, complete: async () => {}, cancel: () => {} }),
+			openStream,
 		};
 		const platform = {
 			inboundDeduper: createMessageDeduplicator(),
@@ -170,8 +193,137 @@ describe("QQ inbound pipeline", () => {
 		});
 		const bot = {} as unknown as QQBot;
 		const botConfig = { id: BOT_ID, appId: APP_ID, nickname: "麦麦", avatarUrl: "", appSecret: "", mode: "qr", enabled: true };
-		return { state, handler, bot, botConfig, prompts, sendText, proactive, stickerTagging, agentSession, audit };
+		return {
+			state,
+			handler,
+			bot,
+			botConfig,
+			prompts,
+			sendText,
+			proactive,
+			stickerTagging,
+			agentSession,
+			audit,
+			emitAgentEvent: (event: AgentSessionEvent) => eventListener?.(event),
+			openStream,
+			streamUpdates,
+			streamCompletions,
+		};
 	}
+
+	function assistantEnd(text: string): AgentSessionEvent {
+		return {
+			type: "message_end",
+			message: { role: "assistant", content: [{ type: "text", text }] },
+		} as unknown as AgentSessionEvent;
+	}
+
+	function assistantStart(): AgentSessionEvent {
+		return { type: "message_start", message: { role: "assistant", content: [] } } as unknown as AgentSessionEvent;
+	}
+
+	function assistantTextDelta(delta: string): AgentSessionEvent {
+		return {
+			type: "message_update",
+			message: { role: "assistant", content: [] },
+			assistantMessageEvent: { type: "text_delta", delta },
+		} as unknown as AgentSessionEvent;
+	}
+
+	it("sends and persists each completed Assistant message separately", async () => {
+		const { state, handler, bot, botConfig, sendText, agentSession, emitAgentEvent } = await setup();
+		vi.mocked(agentSession.prompt).mockImplementation(async () => {
+			emitAgentEvent(assistantStart());
+			emitAgentEvent(assistantEnd("天气不错呀"));
+			emitAgentEvent(assistantStart());
+			emitAgentEvent(assistantEnd("我看看温度和湿度"));
+			agentSession.messages.push({ role: "assistant", stopReason: "stop", content: [] });
+		});
+
+		await handler(bot, botConfig as never, inbound());
+
+		expect(sendText.mock.calls.map((call) => call[1])).toEqual(["天气不错呀", "我看看温度和湿度"]);
+		expect(state.getSessions()[0]?.messages.filter((item) => item.role === "assistant").map((item) => item.content)).toEqual([
+			"天气不错呀",
+			"我看看温度和湿度",
+		]);
+	});
+
+	it("opens and completes one C2C stream per Assistant message", async () => {
+		const { handler, bot, botConfig, agentSession, emitAgentEvent, openStream, streamUpdates, streamCompletions } = await setup();
+		vi.mocked(agentSession.prompt).mockImplementation(async () => {
+			emitAgentEvent(assistantStart());
+			emitAgentEvent(assistantTextDelta("天气"));
+			emitAgentEvent(assistantTextDelta("不错"));
+			emitAgentEvent(assistantEnd("天气不错"));
+			emitAgentEvent(assistantStart());
+			emitAgentEvent(assistantTextDelta("我看看"));
+			emitAgentEvent(assistantEnd("我看看"));
+			agentSession.messages.push({ role: "assistant", stopReason: "stop", content: [] });
+		});
+
+		await handler(bot, botConfig as never, privateInbound("今天天气怎么样"));
+
+		expect(openStream).toHaveBeenCalledTimes(2);
+		expect(streamUpdates).toEqual([
+			["天气", "天气不错"],
+			["我看看"],
+		]);
+		expect(streamCompletions).toHaveLength(2);
+	});
+
+	it("records tool activity and optionally sends translated progress to QQ", async () => {
+		const { state, handler, bot, botConfig, sendText, agentSession, emitAgentEvent } = await setup();
+		state.registerPeer("group", "group-1", BOT_ID, "测试群").features.showToolActivity = true;
+		vi.mocked(agentSession.prompt).mockImplementation(async () => {
+			emitAgentEvent({ type: "tool_execution_start", toolCallId: "call-1", toolName: "web_search", args: {} } as AgentSessionEvent);
+			emitAgentEvent({
+				type: "tool_execution_end",
+				toolCallId: "call-1",
+				toolName: "web_search",
+				result: {},
+				isError: false,
+				durationMs: 1250,
+			} as AgentSessionEvent);
+			emitAgentEvent(assistantStart());
+			emitAgentEvent(assistantEnd("查到了。"));
+			agentSession.messages.push({ role: "assistant", stopReason: "stop", content: [] });
+		});
+
+		await handler(bot, botConfig as never, inbound());
+
+		expect(sendText.mock.calls.map((call) => call[1])).toEqual([
+			"正在使用「网页搜索」…",
+			"「网页搜索」执行成功（1.3 秒）",
+			"查到了。",
+		]);
+		expect(state.getSessions()[0]?.activities).toEqual([
+			expect.objectContaining({ id: "call-1", label: "网页搜索", status: "success", durationMs: 1250 }),
+		]);
+	});
+
+	it("keeps translated tool progress off QQ by default while retaining it in the session", async () => {
+		const { state, handler, bot, botConfig, sendText, agentSession, emitAgentEvent } = await setup();
+		vi.mocked(agentSession.prompt).mockImplementation(async () => {
+			emitAgentEvent({ type: "tool_execution_start", toolCallId: "call-2", toolName: "read", args: {} } as AgentSessionEvent);
+			emitAgentEvent({
+				type: "tool_execution_end",
+				toolCallId: "call-2",
+				toolName: "read",
+				result: {},
+				isError: false,
+				durationMs: 200,
+			} as AgentSessionEvent);
+			agentSession.messages.push({ role: "assistant", stopReason: "stop", content: [] });
+		});
+
+		await handler(bot, botConfig as never, inbound());
+
+		expect(sendText.mock.calls.map((call) => call[1])).toEqual(["收到啦"]);
+		expect(state.getSessions()[0]?.activities?.[0]).toEqual(
+			expect.objectContaining({ id: "call-2", label: "读取文件", status: "success" }),
+		);
+	});
 
 	it("replies to a mentioned group message and persists both sides", async () => {
 		const { state, handler, bot, botConfig, prompts, sendText, proactive, stickerTagging } = await setup();

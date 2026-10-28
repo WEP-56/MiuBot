@@ -63,6 +63,7 @@ export {
 	type ReadToolInput,
 	type ReadToolOptions,
 } from "./read.ts";
+export { type CreateScheduledTaskInput, createScheduleTaskTool, type ScheduledTaskSchedule } from "./schedule-task.ts";
 export {
 	createLoadSkillTool,
 	type InstalledSkill,
@@ -72,6 +73,7 @@ export {
 	removeInstalledSkill,
 } from "./skills/runtime.ts";
 export { createStickerTools, type StickerToolItem, type StickerToolStore } from "./stickers/tools.ts";
+export { createTimeTool } from "./time.ts";
 export {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -102,8 +104,10 @@ import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./ls.t
 import type { McpRuntime } from "./mcp/runtime.ts";
 import { createPowerShellTool, createPowerShellToolDefinition, type PowerShellToolOptions } from "./powershell.ts";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.ts";
+import { type CreateScheduledTaskInput, createScheduleTaskTool } from "./schedule-task.ts";
 import { createLoadSkillTool } from "./skills/runtime.ts";
 import { createStickerTools, type StickerToolItem, type StickerToolStore } from "./stickers/tools.ts";
+import { createTimeTool } from "./time.ts";
 import { createWebSearchTool, type WebSearchConfig } from "./web-search.ts";
 import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } from "./write.ts";
 
@@ -134,20 +138,29 @@ export interface ToolsOptions {
 
 export interface BuiltinToolsOptions<T extends StickerToolItem = StickerToolItem> {
 	webSearch: () => WebSearchConfig;
+	timezone?: () => string;
 	skills?: { cwd: string; agentDir: string };
 	stickers?: { store: StickerToolStore<T>; canUse: () => boolean; send: (sticker: T) => Promise<void> };
 	imageGen?: { generate: (request: ImageGenerationRequest) => Promise<void> };
 	mcp?: McpRuntime;
+	scheduleTask?: {
+		createTask(input: CreateScheduledTaskInput): Promise<{ id: string; nextRunAt: string }>;
+		allowedTools(): string[];
+	};
 }
 
 export function createBuiltinTools<T extends StickerToolItem>(options: BuiltinToolsOptions<T>): ToolDefinition[] {
 	return [
 		createWebSearchTool(options.webSearch),
+		createTimeTool(options.timezone ?? (() => "Asia/Shanghai")),
 		...(options.skills ? [createLoadSkillTool(options.skills.cwd, options.skills.agentDir)] : []),
 		...(options.stickers
 			? createStickerTools(options.stickers.store, options.stickers.canUse, options.stickers.send)
 			: []),
 		...(options.imageGen ? [createImageGenTool(options.imageGen.generate)] : []),
+		...(options.scheduleTask
+			? [createScheduleTaskTool(options.scheduleTask.createTask, options.scheduleTask.allowedTools)]
+			: []),
 		...(options.mcp?.getEnabledToolDefinitions() ?? []),
 	];
 }

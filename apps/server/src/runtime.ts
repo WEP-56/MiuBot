@@ -72,6 +72,8 @@ export type ToolSettings = {
 	 * 以前那种「挑第一个启用且有 Key 的」会让「换了提供商却没生效」变得无法解释。
 	 */
 	imageGen: { providerId: string };
+	/** 默认显示与 Agent 确认时间时使用的 IANA 时区。 */
+	timezone: string;
 };
 export type ProactiveGateSettings = {
 	enabled: boolean;
@@ -196,6 +198,7 @@ export function createDefaultConfig(): AppConfig {
 			stickerTaggerModelId: "",
 			webSearch: { provider: "tavily", apiKeys: { tavily: "", brave: "", exa: "", serper: "" } },
 			imageGen: { providerId: "" },
+			timezone: "Asia/Shanghai",
 		},
 		mcpServers: [],
 		access: { allowedPeers: [] },

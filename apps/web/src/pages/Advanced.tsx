@@ -172,36 +172,29 @@ export function Memory() {
 
 /* 定时任务 */
 export function Scheduler() {
-  return (
-    <PageShell>
-        <div className="flex items-start justify-between pb-1">
-          <div>
-            <h1 className="text-[20px] font-bold text-white tracking-tight">定时任务</h1>
-            <p className="text-[13px] text-[#777777] mt-0.5">Cron 定时触发 Agent 执行任务或推送</p>
-          </div>
-          <button className="btn-primary-white">
-            <Icon.Plus size={14} />
-            <span>新建任务</span>
-          </button>
-        </div>
-
-        <div className="sketch-card p-5 space-y-3">
-          {[
-            { name: "每日 08:00 早报推送", cron: "0 8 * * *", target: "QQ群 · 摸鱼研究所", status: "运行中" },
-            { name: "每周五 18:00 下班提醒", cron: "0 18 * * 5", target: "全员广播", status: "运行中" },
-            { name: "每日凌晨清理过期日志", cron: "0 3 * * *", target: "系统后台", status: "运行中" },
-          ].map((t) => (
-            <div key={t.name} className="flex items-center justify-between py-2 border-b border-[rgba(255,255,255,0.04)]">
-              <div>
-                <div className="text-[14px] font-medium text-white">{t.name}</div>
-                <div className="text-[12px] text-[#777777] font-mono mt-0.5">{t.cron} · {t.target}</div>
-              </div>
-              <span className="pill-green">{t.status}</span>
-            </div>
-          ))}
-        </div>
-    </PageShell>
-  );
+  type Schedule = { type: "once"; runAt: string } | { type: "interval"; intervalMinutes: number } | { type: "range"; minMinutes: number; maxMinutes: number } | { type: "daily"; time: string; timezone: string };
+  type Session = { id: string; title: string; scope: string; peerName: string; peerId: string; botId: string; tools: string[] };
+  type Task = { id: string; name: string; prompt: string; sessionId: string; schedule: Schedule; allowedTools: string[]; enabled: boolean; nextRunAt: string; lastStatus?: string; lastError?: string };
+  const [tasks, setTasks] = useState<Task[]>([]); const [sessions, setSessions] = useState<Session[]>([]); const [creating, setCreating] = useState(false); const [notice, setNotice] = useState("");
+  const [name, setName] = useState(""); const [prompt, setPrompt] = useState(""); const [sessionId, setSessionId] = useState(""); const [kind, setKind] = useState<Schedule["type"]>("interval"); const [minutes, setMinutes] = useState(30); const [maxMinutes, setMaxMinutes] = useState(120); const [runAt, setRunAt] = useState(""); const [dailyTime, setDailyTime] = useState("09:00"); const [timezone, setTimezone] = useState("Asia/Shanghai"); const [allowedTools, setAllowedTools] = useState<string[]>([]);
+  const selected = sessions.find((item) => item.id === sessionId);
+  const load = async () => { const response = await fetch("/api/scheduler"); const data = await response.json() as { tasks: Task[]; sessions: Session[] }; if (!response.ok) throw new Error("无法读取定时任务"); setTasks(data.tasks); setSessions(data.sessions); setSessionId((current) => current || data.sessions[0]?.id || ""); };
+  useEffect(() => { void load().catch((error) => setNotice(String(error))); }, []);
+  const create = async () => { setNotice(""); try { let schedule: Schedule; if (kind === "once") schedule = { type: kind, runAt: new Date(runAt).toISOString() }; else if (kind === "daily") schedule = { type: kind, time: dailyTime, timezone }; else if (kind === "range") schedule = { type: kind, minMinutes: minutes, maxMinutes }; else schedule = { type: kind, intervalMinutes: minutes }; const response = await fetch("/api/scheduler", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name, prompt, sessionId, schedule, allowedTools }) }); const data = await response.json() as { message?: string }; if (!response.ok) throw new Error(data.message ?? "创建失败"); setCreating(false); setName(""); setPrompt(""); setAllowedTools([]); await load(); } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); } };
+  const mutate = async (task: Task, action: "toggle" | "delete") => { const response = action === "delete" ? await fetch(`/api/scheduler/${task.id}`, { method: "DELETE" }) : await fetch(`/api/scheduler/${task.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: !task.enabled }) }); const data = await response.json() as { message?: string }; if (!response.ok) setNotice(data.message ?? "操作失败"); else await load(); };
+  const formatRule = (schedule: Schedule) => schedule.type === "once" ? `单次 · ${new Date(schedule.runAt).toLocaleString()}` : schedule.type === "interval" ? `每 ${schedule.intervalMinutes} 分钟` : schedule.type === "range" ? `每 ${schedule.minMinutes}–${schedule.maxMinutes} 分钟随机` : `每天 ${schedule.time} · ${schedule.timezone}`;
+  return <PageShell>
+    <div className="flex items-start justify-between gap-4"><div><h1 className="text-[20px] font-bold">定时任务</h1><p className="mt-0.5 text-[13px] text-[#777777]">绑定会话运行 Agent，并向对应 QQ 对象发送回复</p></div><button className="btn-primary-white shrink-0" onClick={() => setCreating(!creating)}><Icon.Plus size={14}/><span>新建任务</span></button></div>
+    {notice && <div role="status" className="text-sm text-amber-300">{notice}</div>}
+    {creating && <section className="sketch-card space-y-3 p-4">
+      <div className="grid gap-3 md:grid-cols-2"><label className="text-sm">任务名称<input className="sketch-input mt-1 w-full" value={name} onChange={(e) => setName(e.target.value)} /></label><label className="text-sm">绑定会话<select className="sketch-input mt-1 w-full" value={sessionId} onChange={(e) => { setSessionId(e.target.value); setAllowedTools([]); }}><option value="">选择会话</option>{sessions.map((s) => <option key={s.id} value={s.id}>{s.title} · {s.peerName} ({s.scope === "group" ? "群" : "私聊"})</option>)}</select></label></div>
+      <label className="block text-sm">执行 Prompt<textarea className="sketch-input mt-1 min-h-24 w-full" value={prompt} onChange={(e) => setPrompt(e.target.value)} /></label>
+      <div className="grid gap-3 md:grid-cols-3"><label className="text-sm">规则<select className="sketch-input mt-1 w-full" value={kind} onChange={(e) => setKind(e.target.value as Schedule["type"])}><option value="once">单次</option><option value="interval">固定间隔</option><option value="range">随机间隔范围</option><option value="daily">每天指定时间</option></select></label>{kind === "once" ? <label className="text-sm">执行时间<input className="sketch-input mt-1 w-full" type="datetime-local" value={runAt} onChange={(e) => setRunAt(e.target.value)} /></label> : kind === "daily" ? <><label className="text-sm">每天时间<input className="sketch-input mt-1 w-full" type="time" value={dailyTime} onChange={(e) => setDailyTime(e.target.value)} /></label><label className="text-sm">时区<input className="sketch-input mt-1 w-full" value={timezone} onChange={(e) => setTimezone(e.target.value)} /></label></> : <><label className="text-sm">{kind === "range" ? "最小分钟" : "间隔分钟"}<input className="sketch-input mt-1 w-full" type="number" min={1} value={minutes} onChange={(e) => setMinutes(Number(e.target.value))} /></label>{kind === "range" && <label className="text-sm">最大分钟<input className="sketch-input mt-1 w-full" type="number" min={minutes} value={maxMinutes} onChange={(e) => setMaxMinutes(Number(e.target.value))} /></label>}</>}</div>
+      <fieldset><legend className="text-sm">任务可用 Tools</legend>{selected?.tools.length ? <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">{selected.tools.map((tool) => <label key={tool} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={allowedTools.includes(tool)} onChange={(e) => setAllowedTools(e.target.checked ? [...allowedTools, tool] : allowedTools.filter((item) => item !== tool))}/>{tool}</label>)}</div> : <p className="mt-1 text-xs text-[#888888]">该会话没有可授权的 Tools</p>}</fieldset>
+      <div className="flex justify-end gap-2"><button className="btn-pill-dark" onClick={() => setCreating(false)}>取消</button><button className="btn-primary-white" disabled={!name.trim() || !prompt.trim() || !sessionId} onClick={() => void create()}>创建</button></div>
+    </section>}
+    <section className="space-y-2">{tasks.length === 0 ? <div className="py-8 text-center text-sm text-[#888888]">暂无定时任务</div> : tasks.map((task) => { const session = sessions.find((item) => item.id === task.sessionId); return <article key={task.id} className="sketch-card flex flex-wrap items-start justify-between gap-3 p-4"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="font-semibold">{task.name}</h2><span className={task.enabled ? "pill-green" : "pill-gray"}>{task.enabled ? "启用" : "暂停"}</span></div><div className="mt-1 text-xs text-[#888888]">{formatRule(task.schedule)} · {session?.peerName ?? task.sessionId} · 下次 {new Date(task.nextRunAt).toLocaleString()}</div><p className="mt-2 whitespace-pre-wrap text-sm">{task.prompt}</p>{task.lastError && <p className="mt-1 text-xs text-red-400">上次失败：{task.lastError}</p>}</div><div className="flex gap-2"><button className="btn-pill-dark" onClick={() => void mutate(task, "toggle")}>{task.enabled ? "暂停" : "恢复"}</button><button className="btn-pill-dark text-red-400" onClick={() => { if (window.confirm(`删除任务“${task.name}”？`)) void mutate(task, "delete"); }}>删除</button></div></article>; })}</section>
+  </PageShell>;
 }
 
 /* 运行日志 / 审计日志 */
@@ -539,27 +532,29 @@ export function Tools() {
   const [imageProviderId, setImageProviderId] = useState("");
   const [imageKey, setImageKey] = useState("");
   const [imageDraft, setImageDraft] = useState<ImageProvider | null>(null);
+  const [timezone, setTimezone] = useState("Asia/Shanghai");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   /** 已启用的文件与命令类工具：公网部署下最该被看见的一行。 */
   const riskyTools = tools.filter((tool) => tool.native && tool.enabled).map((tool) => tool.name);
 
-  const applyTools = (data: { tools: ToolEntry[]; mcpEnabled: boolean; skillsEnabled: boolean; stickersEnabled: boolean; webSearch: { provider: SearchProvider; configuredProviders: Record<SearchProvider, boolean> }; imageGen?: { providerId: string; providers: ImageProvider[] } }) => {
+  const applyTools = (data: { tools: ToolEntry[]; mcpEnabled: boolean; skillsEnabled: boolean; stickersEnabled: boolean; webSearch: { provider: SearchProvider; configuredProviders: Record<SearchProvider, boolean> }; imageGen?: { providerId: string; providers: ImageProvider[] }; timezone?: string }) => {
     setTools(data.tools); setMcpEnabled(data.mcpEnabled); setSkillsEnabled(data.skillsEnabled); setStickersEnabled(data.stickersEnabled); setProvider(data.webSearch.provider); setConfigured(data.webSearch.configuredProviders);
     if (data.imageGen) { setImageProviderId(data.imageGen.providerId); setImageProviders(data.imageGen.providers); }
+    if (data.timezone) setTimezone(data.timezone);
   };
 
   useEffect(() => {
     void fetch("/api/tools").then((response) => response.json()).then(applyTools).catch(() => setNotice("无法连接 Miubot Server"));
   }, []);
 
-  const save = async (nextTools: ToolEntry[], nextProvider = provider, key = "", nextMcpEnabled = mcpEnabled, nextSkillsEnabled = skillsEnabled, nextStickersEnabled = stickersEnabled, nextImageProviderId = imageProviderId) => {
+  const save = async (nextTools: ToolEntry[], nextProvider = provider, key = "", nextMcpEnabled = mcpEnabled, nextSkillsEnabled = skillsEnabled, nextStickersEnabled = stickersEnabled, nextImageProviderId = imageProviderId, nextTimezone = timezone) => {
     setBusy(true); setNotice("");
     try {
-      const response = await fetch("/api/tools", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: nextTools.filter((item) => item.enabled).map((item) => item.name), mcpEnabled: nextMcpEnabled, skillsEnabled: nextSkillsEnabled, stickersEnabled: nextStickersEnabled, webSearch: { provider: nextProvider, apiKeys: key ? { [nextProvider]: key } : {} }, imageGen: { providerId: nextImageProviderId } }) });
-      const data = await response.json() as { tools?: ToolEntry[]; mcpEnabled?: boolean; skillsEnabled?: boolean; stickersEnabled?: boolean; webSearch?: { provider: SearchProvider; configuredProviders: Record<SearchProvider, boolean> }; imageGen?: { providerId: string; providers: ImageProvider[] }; message?: string };
+      const response = await fetch("/api/tools", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: nextTools.filter((item) => item.enabled).map((item) => item.name), mcpEnabled: nextMcpEnabled, skillsEnabled: nextSkillsEnabled, stickersEnabled: nextStickersEnabled, webSearch: { provider: nextProvider, apiKeys: key ? { [nextProvider]: key } : {} }, imageGen: { providerId: nextImageProviderId }, timezone: nextTimezone }) });
+      const data = await response.json() as { tools?: ToolEntry[]; mcpEnabled?: boolean; skillsEnabled?: boolean; stickersEnabled?: boolean; webSearch?: { provider: SearchProvider; configuredProviders: Record<SearchProvider, boolean> }; imageGen?: { providerId: string; providers: ImageProvider[] }; timezone?: string; message?: string };
       if (!response.ok || !data.tools || !data.webSearch) throw new Error(data.message ?? "保存失败");
-      applyTools({ tools: data.tools, mcpEnabled: data.mcpEnabled ?? false, skillsEnabled: data.skillsEnabled ?? false, stickersEnabled: data.stickersEnabled ?? false, webSearch: data.webSearch, imageGen: data.imageGen });
+      applyTools({ tools: data.tools, mcpEnabled: data.mcpEnabled ?? false, skillsEnabled: data.skillsEnabled ?? false, stickersEnabled: data.stickersEnabled ?? false, webSearch: data.webSearch, imageGen: data.imageGen, timezone: data.timezone });
       setApiKey(""); setImageKey(""); setNotice("配置已保存");
     } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
@@ -593,6 +588,7 @@ export function Tools() {
       <article className="sketch-card flex items-center justify-between gap-4 p-4"><div><div className="font-semibold">表情包 tools</div><p className="mt-1 text-xs text-[#888888]">允许 Agent 搜索并发送已审核表情；还需在会话对象配置中授权。</p></div><div className="flex shrink-0 items-center gap-2 text-sm"><Toggle checked={stickersEnabled} disabled={busy} onChange={(next) => { setStickersEnabled(next); void save(tools, provider, "", mcpEnabled, skillsEnabled, next); }} label="启用表情包 tools"/><span>启用</span></div></article>
       {tools.map((tool) => <article key={tool.name} className="sketch-card flex items-center justify-between gap-4 p-4">
         <div className="min-w-0"><div className="font-semibold">{tool.label}<code className="ml-2 text-xs text-[#888888]">{tool.name}</code></div><p className="mt-1 text-xs text-[#888888]">{tool.description}</p>
+          {tool.name === "time" && <div className="mt-3 flex flex-wrap items-center gap-2"><label className="text-xs text-[#888888]" htmlFor="time-tool-timezone">时区</label><input id="time-tool-timezone" className="sketch-input min-w-[220px]" aria-label="时间工具时区" value={timezone} onChange={(event) => setTimezone(event.target.value)} placeholder="Asia/Shanghai"/><button className="btn-pill-dark" disabled={busy || !timezone.trim()} onClick={() => void save(tools, provider, "", mcpEnabled, skillsEnabled, stickersEnabled, imageProviderId, timezone.trim())}>保存时区</button></div>}
           {tool.name === "web_search" && <div className="mt-3 flex flex-wrap items-center gap-2">
             <select className="sketch-input" aria-label="网页搜索提供商" value={provider} disabled={busy} onChange={(event) => { const next = event.target.value as SearchProvider; setProvider(next); void save(tools, next); }}>
               {searchProviders.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}

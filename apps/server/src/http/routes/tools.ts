@@ -31,6 +31,7 @@ export async function handleToolRoutes(
 				providerId: config.tools.imageGen.providerId,
 				providers: publicConfig(config).imageProviders,
 			},
+			timezone: config.tools.timezone,
 		});
 		return true;
 	}
@@ -162,6 +163,13 @@ export async function handleToolRoutes(
 			imageGenInput.providerId === undefined
 				? config.tools.imageGen.providerId
 				: String(imageGenInput.providerId ?? "").trim();
+		const timezone = input.timezone === undefined ? config.tools.timezone : String(input.timezone).trim();
+		try {
+			new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format();
+		} catch {
+			json(res, 400, { ok: false, message: "时区无效，请使用 IANA 时区，例如 Asia/Shanghai" });
+			return true;
+		}
 		if (imageGenProviderId) {
 			const chosen = config.imageProviders.find((item) => item.id === imageGenProviderId);
 			if (!chosen) {
@@ -190,6 +198,7 @@ export async function handleToolRoutes(
 				apiKeys,
 			},
 			imageGen: { providerId: imageGenProviderId },
+			timezone,
 		};
 		await ctx.config.save();
 		if (skillsEnabled !== previousSkillsEnabled || stickersEnabled !== previousStickersEnabled)
@@ -213,6 +222,7 @@ export async function handleToolRoutes(
 				providerId: config.tools.imageGen.providerId,
 				providers: publicConfig(config).imageProviders,
 			},
+			timezone: config.tools.timezone,
 		});
 		return true;
 	}
