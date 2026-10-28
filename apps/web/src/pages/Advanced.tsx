@@ -140,34 +140,85 @@ export function Skills() {
 
 /* 记忆与知识库 */
 export function Memory() {
-  return (
-    <PageShell>
-        <div className="flex items-start justify-between pb-1">
-          <div>
-            <h1 className="text-[20px] font-bold text-white tracking-tight">记忆与知识库</h1>
-            <p className="text-[13px] text-[#777777] mt-0.5">长期记忆条目、群友画像与挂载文档库</p>
+  type Memory = { enabled: boolean; dreamEnabled: boolean; dreamIntervalHours: number; dreamProviderId: string; dreamModelId: string; dreamNextRunAt?: string; dreamLastRunAt?: string; dreamLastStatus?: "running" | "success" | "error"; dreamLastError?: string };
+  type Peer = { botId: string; botName: string; scope: "group" | "c2c"; peerId: string; name: string; memory: Memory };
+  type Entry = { id: string; area: "shared" | "personal"; category: "user" | "feedback" | "project" | "reference"; title: string; content: string; createdAt: string; updatedAt: string; ownerOpenId?: string; memberName?: string };
+  type Draft = { id: string; area: Entry["area"]; category: Entry["category"]; title: string; content: string; ownerOpenId: string; memberName: string };
+  const emptyDraft = (scope: Peer["scope"] = "group"): Draft => ({ id: "", area: scope === "group" ? "shared" : "personal", category: "user", title: "", content: "", ownerOpenId: "", memberName: "" });
+  const [peers, setPeers] = useState<Peer[]>([]); const [selectedKey, setSelectedKey] = useState(""); const [entries, setEntries] = useState<Entry[]>([]);
+  const [prompt, setPrompt] = useState(""); const [draft, setDraft] = useState<Draft | null>(null); const [notice, setNotice] = useState(""); const [busy, setBusy] = useState(false);
+  const selected = peers.find((peer) => `${peer.botId}:${peer.scope}:${peer.peerId}` === selectedKey);
+  const [providerOptions, setProviderOptions] = useState<Array<{ id: string; name: string; models: Array<{ id: string; name: string }> }>>([]);
+  const selectedProvider = providerOptions.find((provider) => provider.id === selected?.memory.dreamProviderId);
+  const identity = selected ? { botId: selected.botId, scope: selected.scope, peerId: selected.peerId } : undefined;
+  const keyOf = (peer: Peer) => `${peer.botId}:${peer.scope}:${peer.peerId}`;
+  const load = async () => {
+    const response = await fetch("/api/memory"); const data = await response.json() as { prompt: string; peers: Peer[] };
+    if (!response.ok) throw new Error("无法读取长期记忆配置"); setPrompt(data.prompt); setPeers(data.peers); setSelectedKey((current) => current || (data.peers[0] ? keyOf(data.peers[0]) : ""));
+  };
+  const loadEntries = async (peer: Peer) => {
+    const query = new URLSearchParams({ botId: peer.botId, scope: peer.scope, peerId: peer.peerId });
+    const response = await fetch(`/api/memory/document?${query}`); const data = await response.json() as { entries?: Entry[]; message?: string };
+    if (!response.ok) throw new Error(data.message ?? "读取记忆失败"); setEntries(data.entries ?? []);
+  };
+  useEffect(() => { void load().catch((error) => setNotice(String(error))); }, []);
+  useEffect(() => { if (!selected) { setEntries([]); return; } void loadEntries(selected).catch((error) => setNotice(String(error))); }, [selectedKey]);
+  const savePrompt = async () => {
+    setBusy(true); setNotice("");
+    try { const response = await fetch("/api/memory/prompt", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ prompt }) }); const data = await response.json() as { message?: string }; if (!response.ok) throw new Error(data.message ?? "保存 Prompt 失败"); setNotice("长期记忆 Prompt 已保存"); }
+    catch (error) { setNotice(error instanceof Error ? error.message : String(error)); } finally { setBusy(false); }
+  };
+  const saveEntry = async () => {
+    if (!selected || !identity || !draft) return; setBusy(true); setNotice("");
+    try { const response = await fetch("/api/memory/entry", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...identity, ...draft }) }); const data = await response.json() as { message?: string }; if (!response.ok) throw new Error(data.message ?? "保存记忆失败"); setDraft(null); await loadEntries(selected); setNotice("记忆条目已保存"); }
+    catch (error) { setNotice(error instanceof Error ? error.message : String(error)); } finally { setBusy(false); }
+  };
+  const deleteEntry = async (entry: Entry) => {
+    if (!selected || !identity || !window.confirm(`删除记忆「${entry.title}」？`)) return; setBusy(true);
+    try { const response = await fetch("/api/memory/entry", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...identity, id: entry.id }) }); if (!response.ok) throw new Error("删除记忆失败"); await loadEntries(selected); setNotice("记忆条目已删除"); }
+    catch (error) { setNotice(error instanceof Error ? error.message : String(error)); } finally { setBusy(false); }
+  };
+  const savePeerMemory = async () => {
+    if (!selected || !identity) return; setBusy(true); setNotice("");
+    try {
+      const query = new URLSearchParams(identity); const current = await fetch(`/api/peer-config?${query}`); const details = await current.json() as { config?: Record<string, unknown>; providers?: typeof providerOptions; message?: string };
+      if (!current.ok || !details.config) throw new Error(details.message ?? "读取对象配置失败");
+      setProviderOptions(details.providers ?? []);
+      const response = await fetch("/api/peer-config", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...details.config, memory: selected.memory }) });
+      const result = await response.json() as { message?: string }; if (!response.ok) throw new Error(result.message ?? "保存对象记忆配置失败"); await load(); setNotice("对象记忆配置已保存");
+    } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); } finally { setBusy(false); }
+  };
+  const runDream = async () => {
+    if (!identity || !selected) return; setBusy(true); setNotice("");
+    try { const response = await fetch("/api/memory/dream", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(identity) }); const data = await response.json() as { message?: string }; if (!response.ok) throw new Error(data.message ?? "记忆整理失败"); await load(); await loadEntries(selected); setNotice("后台记忆整理完成"); }
+    catch (error) { await load().catch(() => {}); setNotice(error instanceof Error ? error.message : String(error)); } finally { setBusy(false); }
+  };
+  const clearDocument = async () => {
+    if (!identity || !selected || !window.confirm(`删除「${selected.name}」的全部长期记忆？`)) return; setBusy(true);
+    try { const response = await fetch("/api/memory/document", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify(identity) }); if (!response.ok) throw new Error("清空长期记忆失败"); setEntries([]); setDraft(null); setNotice("该对象的长期记忆已清空"); }
+    catch (error) { setNotice(error instanceof Error ? error.message : String(error)); } finally { setBusy(false); }
+  };
+  return <PageShell>
+    <div><h1 className="text-[20px] font-bold">长期记忆</h1><p className="mt-0.5 text-[13px] text-[#777777]">按 Bot 与 QQ 对象隔离的 Markdown 记忆、成员摘要和后台整理</p></div>
+    <section className="sketch-card space-y-3 p-5"><div><h2 className="font-semibold">长期记忆行为 Prompt</h2><p className="mt-1 text-xs text-[#888888]">只指导记忆保存策略；记忆正文会作为不可信历史资料单独注入。</p></div><textarea className="sketch-input min-h-40 w-full" value={prompt} disabled={busy} onChange={(event) => setPrompt(event.target.value)}/><button className="btn-pill-dark" disabled={busy} onClick={() => void savePrompt()}>保存 Prompt</button></section>
+    <section className="grid gap-4 lg:grid-cols-[250px_minmax(0,1fr)]"><aside className="sketch-card max-h-[650px] overflow-y-auto p-2"><h2 className="px-3 py-2 text-sm font-semibold">对象 · {peers.length}</h2>{peers.length ? peers.map((peer) => <button key={keyOf(peer)} className={`mb-1 w-full rounded-lg border p-3 text-left ${selectedKey === keyOf(peer) ? "bg-[var(--bg-active)]" : "bg-transparent"}`} style={{ borderColor: selectedKey === keyOf(peer) ? "var(--border-strong)" : "transparent" }} onClick={() => { setSelectedKey(keyOf(peer)); setDraft(null); }}><span className="block truncate text-sm font-medium">{peer.name}</span><span className="mt-1 block text-xs text-[#888888]">{peer.botName} · {peer.scope === "group" ? "群聊" : "私聊"}</span><span className="mt-1 block truncate font-mono text-[10px] text-[#777777]">{peer.peerId}</span><span className={peer.memory.enabled ? "pill-green mt-2" : "pill-gray mt-2"}>{peer.memory.enabled ? "已启用" : "已停用"}</span></button>) : <p className="p-3 text-sm text-[#888888]">还没有 QQ 对象；收到消息或在会话页添加对象后会显示在这里。</p>}</aside>
+      {selected ? <div className="space-y-4">
+        <section className="sketch-card space-y-3 p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold">{selected.name}</h2><p className="mt-1 break-all font-mono text-[11px] text-[#888888]">{selected.botName} · {selected.scope} · {selected.peerId}</p></div><button className="btn-pill-dark text-red-400" disabled={busy} onClick={() => void clearDocument()}>清空记忆</button></div>
+          <label className="flex items-center gap-2 text-sm"><Toggle checked={selected.memory.enabled} disabled={busy} onChange={(enabled) => setPeers((current) => current.map((peer) => keyOf(peer) === selectedKey ? { ...peer, memory: { ...peer.memory, enabled } } : peer))} label="启用长期记忆"/><span>启用记忆注入与读写</span></label>
+          <div className="border-t pt-3" style={{ borderColor: "var(--hairline)" }}><label className="flex items-center gap-2 text-sm"><Toggle checked={selected.memory.dreamEnabled} disabled={busy || !selected.memory.enabled} onChange={(dreamEnabled) => setPeers((current) => current.map((peer) => keyOf(peer) === selectedKey ? { ...peer, memory: { ...peer.memory, dreamEnabled } } : peer))} label="后台整理"/><span>后台记忆整理</span></label>
+            <p className="mt-1 text-xs text-[#888888]">闲时运行，只整理现有记忆文件，不读取会话记录，也不会向 QQ 发送内容。</p>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="text-xs">整理间隔（小时）<input className="sketch-input mt-1 w-full" type="number" min="1" max="8760" value={selected.memory.dreamIntervalHours} disabled={busy || !selected.memory.enabled} onChange={(event) => setPeers((current) => current.map((peer) => keyOf(peer) === selectedKey ? { ...peer, memory: { ...peer.memory, dreamIntervalHours: Number(event.target.value) } } : peer))}/></label><label className="text-xs">整理模型提供商<select className="sketch-input mt-1 w-full" value={selected.memory.dreamProviderId} disabled={busy || !selected.memory.enabled} onFocus={() => { if (providerOptions.length) return; const query = new URLSearchParams(identity!); void fetch(`/api/peer-config?${query}`).then((response) => response.json()).then((data: { providers?: typeof providerOptions }) => setProviderOptions(data.providers ?? [])); }} onChange={(event) => { const provider = providerOptions.find((item) => item.id === event.target.value); setPeers((current) => current.map((peer) => keyOf(peer) === selectedKey ? { ...peer, memory: { ...peer.memory, dreamProviderId: event.target.value, dreamModelId: provider?.models[0]?.id ?? "" } } : peer)); }}><option value="">选择提供商</option>{providerOptions.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>{selected.memory.dreamProviderId && <label className="text-xs">整理模型<select className="sketch-input mt-1 w-full" value={selected.memory.dreamModelId} disabled={busy || !selected.memory.enabled} onChange={(event) => setPeers((current) => current.map((peer) => keyOf(peer) === selectedKey ? { ...peer, memory: { ...peer.memory, dreamModelId: event.target.value } } : peer))}><option value="">选择模型</option>{selectedProvider?.models.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}</select></label>}</div>
+            <div className="mt-3 flex flex-wrap items-center gap-2"><button className="btn-pill-dark" disabled={busy} onClick={() => void savePeerMemory()}>保存对象设置</button><button className="btn-pill-dark" disabled={busy || !selected.memory.enabled} onClick={() => void runDream()}>立即整理</button><span className="text-xs text-[#888888]">{selected.memory.dreamLastStatus === "running" ? "正在整理…" : selected.memory.dreamLastStatus === "success" ? `最近完成：${selected.memory.dreamLastRunAt ? new Date(selected.memory.dreamLastRunAt).toLocaleString() : ""}` : selected.memory.dreamLastStatus === "error" ? `上次失败：${selected.memory.dreamLastError || "未知错误"}` : "尚无整理记录"}</span></div>
           </div>
-          <button className="btn-primary-white">
-            <Icon.Plus size={14} />
-            <span>新增条目</span>
-          </button>
-        </div>
-
-        <div className="sketch-card p-5 space-y-3">
-          <div className="text-[14px] font-bold text-white">长期实体记忆 (Top 3)</div>
-          <div className="space-y-2.5 text-[13px]">
-            <div className="p-3 bg-[#141414] rounded-xl border border-[#242424]">
-              <div className="text-white font-medium">摸鱼研究所 · 讨论偏好</div>
-              <div className="text-[#888888] mt-1">成员以全栈工程师为主，偏好简短代码、不喜欢寒暄客套。</div>
-            </div>
-            <div className="p-3 bg-[#141414] rounded-xl border border-[#242424]">
-              <div className="text-white font-medium">Alice · 私聊备注</div>
-              <div className="text-[#888888] mt-1">提醒习惯：早晨 08:30 播报天气，偏好温柔二次元语调。</div>
-            </div>
-          </div>
-        </div>
-    </PageShell>
-  );
+        </section>
+        <section className="sketch-card space-y-3 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-semibold">记忆条目 · {entries.length}</h2><p className="mt-1 text-xs text-[#888888]">群共享记忆和成员摘要保存在同一个文件中，注入时按当前发言者过滤。</p></div><button className="btn-pill-dark" onClick={() => setDraft(emptyDraft(selected.scope))}>新增条目</button></div>
+          {draft && <div className="space-y-3 rounded-lg border p-3" style={{ borderColor: "var(--hairline)" }}><div className="grid gap-3 sm:grid-cols-2"><label className="text-xs">记忆区域<select className="sketch-input mt-1 w-full" value={selected.scope === "c2c" ? "personal" : draft.area} disabled={selected.scope === "c2c"} onChange={(event) => setDraft({ ...draft, area: event.target.value as Draft["area"] })}>{selected.scope === "group" && <option value="shared">群共享</option>}<option value="personal">成员 / 私聊对象</option></select></label><label className="text-xs">类型<select className="sketch-input mt-1 w-full" value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value as Draft["category"] })}><option value="user">用户 / 偏好</option><option value="feedback">反馈 / 已验证做法</option><option value="project">持续背景 / 事件</option><option value="reference">资料指针</option></select></label></div>{selected.scope === "group" && draft.area === "personal" && <div className="grid gap-3 sm:grid-cols-2"><label className="text-xs">成员 OpenID<input className="sketch-input mt-1 w-full" value={draft.ownerOpenId} onChange={(event) => setDraft({ ...draft, ownerOpenId: event.target.value })}/></label><label className="text-xs">当前显示名<input className="sketch-input mt-1 w-full" value={draft.memberName} onChange={(event) => setDraft({ ...draft, memberName: event.target.value })}/></label></div>}<label className="block text-xs">标题<input className="sketch-input mt-1 w-full" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })}/></label><label className="block text-xs">内容<textarea className="sketch-input mt-1 min-h-24 w-full" value={draft.content} onChange={(event) => setDraft({ ...draft, content: event.target.value })}/>{selected.scope === "group" && draft.area === "personal" && <span className="mt-1 block text-[11px] text-[#888888]">群成员摘要最多 60 个字符。</span>}</label><div className="flex gap-2"><button className="btn-pill-dark" disabled={busy} onClick={() => void saveEntry()}>保存条目</button><button className="btn-pill-dark" disabled={busy} onClick={() => setDraft(null)}>取消</button></div></div>}
+          {entries.length ? <div className="space-y-2">{entries.map((entry) => <article key={entry.id} className="rounded-lg border p-3" style={{ borderColor: "var(--hairline)" }}><div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="font-medium">{entry.title}</h3><div className="mt-1 text-[11px] text-[#888888]">{entry.area === "shared" ? "群共享" : selected.scope === "group" ? "成员摘要" : "私聊对象"} · {entry.category}{entry.ownerOpenId ? ` · ${entry.memberName ?? "未知成员"} (${entry.ownerOpenId})` : ""}</div></div><div className="flex gap-2"><button className="btn-pill-dark !px-2 !py-1 text-xs" onClick={() => setDraft({ id: entry.id, area: entry.area, category: entry.category, title: entry.title, content: entry.content, ownerOpenId: entry.ownerOpenId ?? "", memberName: entry.memberName ?? "" })}>编辑</button><button className="btn-pill-dark !px-2 !py-1 text-xs text-red-400" disabled={busy} onClick={() => void deleteEntry(entry)}>删除</button></div></div><p className="mt-2 whitespace-pre-wrap text-sm text-[#aaaaaa]">{entry.content}</p><div className="mt-2 text-[10px] text-[#666666]">更新于 {new Date(entry.updatedAt).toLocaleString()}</div></article>)}</div> : <p className="py-6 text-center text-sm text-[#888888]">该对象还没有记忆条目</p>}
+        </section>
+      </div> : <div className="sketch-card p-6 text-sm text-[#888888]">请选择一个对象。对象记忆由会话消息自动建立，也可以在会话页添加。</div>}
+    </section>
+    {notice && <p className="text-sm text-[#aaaaaa]" role="status">{notice}</p>}
+  </PageShell>;
 }
 
 /* 定时任务 */
@@ -416,10 +467,22 @@ function AccessCard() {
 /* 设置 */
 export function Settings() {
   const { theme, setTheme } = useTheme();
+  const [silence, setSilence] = useState({ quietStart: "00:00", quietEnd: "00:00" });
+  const [silenceBusy, setSilenceBusy] = useState(false);
+  const [silenceNotice, setSilenceNotice] = useState("");
   const [gate, setGate] = useState({ dailyMessageLimit: 0, quietStart: "00:00", quietEnd: "00:00", notifyOnLimit: false });
   const [gateBusy, setGateBusy] = useState(false);
   const [gateNotice, setGateNotice] = useState("");
-  useEffect(() => { void fetch("/api/proactive-gate").then((response) => response.json()).then((data: { proactiveGate: typeof gate }) => setGate(data.proactiveGate)).catch(() => setGateNotice("无法读取主动行为限制")); }, []);
+  useEffect(() => {
+    void fetch("/api/global-silence").then((response) => response.json()).then((data: { globalSilence: typeof silence }) => setSilence(data.globalSilence)).catch(() => setSilenceNotice("无法读取全局静默时段"));
+    void fetch("/api/proactive-gate").then((response) => response.json()).then((data: { proactiveGate: typeof gate }) => setGate(data.proactiveGate)).catch(() => setGateNotice("无法读取主动行为限制"));
+  }, []);
+  const saveSilence = async () => {
+    setSilenceBusy(true); setSilenceNotice("");
+    try { const response = await fetch("/api/global-silence", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(silence) }); const data = await response.json() as { globalSilence?: typeof silence; message?: string }; if (!response.ok || !data.globalSilence) throw new Error(data.message ?? "保存失败"); setSilence(data.globalSilence); setSilenceNotice("全局静默时段已保存"); }
+    catch (error) { setSilenceNotice(error instanceof Error ? error.message : String(error)); }
+    finally { setSilenceBusy(false); }
+  };
   const saveGate = async () => {
     setGateBusy(true); setGateNotice("");
     try { const response = await fetch("/api/proactive-gate", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(gate) }); const data = await response.json() as { proactiveGate?: typeof gate; message?: string }; if (!response.ok || !data.proactiveGate) throw new Error(data.message ?? "保存失败"); setGate(data.proactiveGate); setGateNotice("主动行为限制已保存"); }
@@ -431,6 +494,17 @@ export function Settings() {
         <div>
           <h1 className="text-[20px] font-bold text-white tracking-tight">设置</h1>
           <p className="text-[13px] text-[#777777] mt-0.5">外观主题、本地存储管理与版本信息</p>
+        </div>
+
+        <div className="sketch-card p-5 space-y-3">
+          <div className="text-[14px] font-bold text-white">全局静默时段</div>
+          <p className="text-[12px] text-[#888888]">静默期间暂停接收和处理 QQ 与插件事件、所有消息发送及定时任务。按服务器本地时间判断。</p>
+          <div className="grid max-w-lg grid-cols-2 gap-3">
+            <label className="text-[13px] text-[#cccccc]">静默开始<input className="sketch-input mt-1 w-full" type="time" value={silence.quietStart} onChange={(event) => setSilence({ ...silence, quietStart: event.target.value })}/></label>
+            <label className="text-[13px] text-[#cccccc]">静默结束<input className="sketch-input mt-1 w-full" type="time" value={silence.quietEnd} onChange={(event) => setSilence({ ...silence, quietEnd: event.target.value })}/></label>
+          </div>
+          <p className="text-[11px] text-[#777777]">起止时间相同表示关闭静默时段；跨午夜时段也支持。</p>
+          <div className="flex items-center gap-3"><button className="btn-pill-dark" disabled={silenceBusy} onClick={() => void saveSilence()}>{silenceBusy ? "保存中…" : "保存静默时段"}</button>{silenceNotice && <span className="text-xs text-[#aaaaaa]" role="status">{silenceNotice}</span>}</div>
         </div>
 
         <div className="sketch-card p-5 space-y-3">

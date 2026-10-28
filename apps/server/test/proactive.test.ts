@@ -97,4 +97,37 @@ describe("proactive interjection", () => {
 		);
 		expect(prompt).toHaveBeenCalledWith(expect.stringContaining("今天吃什么"), undefined);
 	});
+
+	it("tells the smart judge that missing older history is not a reason to stay silent", async () => {
+		const { state, proactive, log } = await setup();
+		state.setConfig({
+			...state.getConfig(),
+			proactiveGate: {
+				...state.getConfig().proactiveGate,
+				mode: "smart",
+				judgeProviderId: "openai",
+				judgeModelId: "gpt-4o-mini",
+			},
+		});
+		let requestBody: { messages?: Array<{ role: string; content: string }> } | undefined;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+				requestBody = JSON.parse(String(init?.body)) as typeof requestBody;
+				return Response.json({ choices: [{ message: { content: '{"shouldReply":true,"reasonCode":"helpful_answer","topic":"晚饭"}' } }] });
+			}),
+		);
+
+		proactive.queueGroupMessage({} as QQBot, { id: BOT_ID, appId: APP_ID } as never, "group-1", "小明", "user-1", "今晚吃什么？", []);
+
+		await vi.waitFor(() =>
+			expect(log).toHaveBeenCalledWith("INFO", expect.stringContaining("智能插话已发送"), expect.any(String)),
+		);
+		const systemPrompt = requestBody?.messages?.find((item) => item.role === "system")?.content ?? "";
+		const userPrompt = requestBody?.messages?.find((item) => item.role === "user")?.content ?? "";
+		expect(systemPrompt).toContain("没有更早聊天记录，不等于信息不足");
+		expect(systemPrompt).toContain("未回答的问题或明确求助");
+		expect(systemPrompt).toContain("普通闲聊或担心轻微打断");
+		expect(userPrompt).toContain("不要因为窗口没有更早历史就判为 no_context");
+	});
 });

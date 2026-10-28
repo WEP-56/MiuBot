@@ -3,6 +3,8 @@ const TOOL_LABELS: Record<string, string> = {
 	image_gen: "图像生成",
 	schedule_task: "定时任务",
 	time: "确认时间",
+	read_memory: "读取长期记忆",
+	save_memory: "保存长期记忆",
 	read: "读取文件",
 	bash: "Bash",
 	powershell: "PowerShell",

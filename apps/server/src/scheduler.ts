@@ -82,6 +82,8 @@ export function createScheduler(deps: {
 	dataDir: string;
 	getSession(sessionId: string): { id: string } | undefined;
 	getAllowedTools(sessionId: string): string[];
+	/** 全局静默期间暂停调度，任务在静默结束后继续执行。 */
+	isPaused?: () => boolean;
 	execute(task: ScheduledTask): Promise<void>;
 	log(level: "INFO" | "WARN" | "ERROR", text: string, sessionId?: string): void;
 }) {
@@ -132,7 +134,7 @@ export function createScheduler(deps: {
 	}
 
 	async function tick(): Promise<void> {
-		if (tickRunning) return;
+		if (tickRunning || deps.isPaused?.()) return;
 		tickRunning = true;
 		try {
 			const now = new Date();
@@ -140,6 +142,8 @@ export function createScheduler(deps: {
 				(task) => task.enabled && Date.parse(task.nextRunAt) <= now.getTime() && !running.has(task.id),
 			);
 			for (const task of due) {
+				if (deps.isPaused?.()) return;
+				const previous = { ...task };
 				running.add(task.id);
 				const scheduledAt = task.nextRunAt;
 				task.lastRunAt = now.toISOString();
@@ -155,6 +159,12 @@ export function createScheduler(deps: {
 								: nextDaily(task.schedule.time, task.schedule.timezone, nextBase).toISOString();
 				}
 				await save();
+				if (deps.isPaused?.()) {
+					Object.assign(task, previous);
+					running.delete(task.id);
+					await save();
+					return;
+				}
 				try {
 					if (!deps.getSession(task.sessionId)) throw new Error("绑定的会话已删除");
 					await deps.execute({ ...task, nextRunAt: scheduledAt });

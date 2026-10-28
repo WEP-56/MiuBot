@@ -4,7 +4,13 @@ import type { AppState } from "./app-state.ts";
 import type { LogLevel } from "./logging.ts";
 import { type MediaAttachment, prepareMediaAttachments } from "./media.ts";
 import type { createQqPlatform } from "./platform/runtime.ts";
-import { type AppConfig, createChatCompletion, evaluateProactiveGate, type QqBotConfig } from "./runtime.ts";
+import {
+	type AppConfig,
+	createChatCompletion,
+	evaluateProactiveGate,
+	isGlobalSilenceActive,
+	type QqBotConfig,
+} from "./runtime.ts";
 import { sessionPromptContexts, stickerSendContexts } from "./session-context.ts";
 import { enqueueForTarget } from "./target-queue.ts";
 import { localDateKey } from "./util/time.ts";
@@ -25,6 +31,20 @@ export type ProactiveDecision = {
 	result: string;
 	reason: string;
 };
+
+const PROACTIVE_JUDGE_SYSTEM_PROMPT = `你是群聊插话时机判断器，只判断机器人现在是否值得回复，不生成回复正文，也不输出分析过程。
+
+把输入的最近消息窗口当作可判断的完整上下文。它本来就只包含最近几条消息；没有更早聊天记录，不等于信息不足。
+
+shouldReply=true 的情况：有人提出尚未回答的问题或明确求助；当前话题仍在进行，机器人能补充直接相关且不重复的信息；或可以用简短、自然的回应接住明显的玩笑、感谢、祝贺或情绪表达。只要话题可理解且有具体回应价值，倾向回复，不要求机器人必须解决整个话题。
+
+shouldReply=false 仅用于：话题明显结束（如告别或问题已解决）；消息确实无法理解或缺少必要指代，无法形成任何具体回应；机器人刚刚已经答过同一问题；或此时发言明显不合时宜。不要仅因消息短、缺少更早背景、属于普通闲聊或担心轻微打断就判为 false。
+
+reasonCode 用 helpful_answer、directly_relevant、conversation_closed、interruption_risk 或 no_context。no_context 只表示输入本身不可理解/无法回应，不能表示缺少聊天历史。shouldReply 必须填写不带引号的 JSON 布尔值 true 或 false。只输出一行 JSON，例如：{"shouldReply":true,"reasonCode":"helpful_answer","topic":"晚饭"}。`;
+
+function createProactiveJudgePrompt(transcript: string): string {
+	return `请根据下面的群聊最近消息判断是否插话。先看是否有未回答的问题、明确求助或仍在发展的可回应话题。不要因为窗口没有更早历史就判为 no_context。只输出系统要求的 JSON。\n\n群聊最近消息：\n${transcript}`;
+}
 
 export type ProactiveRuntime = {
 	metrics: ProactiveMetrics;
@@ -124,6 +144,12 @@ export function createProactive(deps: {
 	}
 
 	async function evaluateWindow(key: string): Promise<void> {
+		if (isGlobalSilenceActive(config().globalSilence)) {
+			const pending = windows.get(key);
+			if (pending) clearTimeout(pending.timer);
+			windows.delete(key);
+			return;
+		}
 		const window = windows.get(key);
 		if (!window) return;
 		windows.delete(key);
@@ -207,11 +233,11 @@ export function createProactive(deps: {
 				config(),
 				provider.id,
 				model.id,
-				`群聊最近消息：\n${transcript}\n\n请判断现在是否适合由机器人插话。只在能提供直接相关帮助、回答明确问题或自然延续话题时回复。正常闲聊、话题已结束、信息不足或可能打断时应保持安静。只输出 JSON：{"shouldReply":boolean,"reasonCode":"helpful_answer|directly_relevant|conversation_closed|interruption_risk|no_context","topic":"简短话题"}`,
+				createProactiveJudgePrompt(transcript),
 				[
 					{
 						role: "system",
-						content: "你是群聊插话时机判断器。只判断是否值得回复，不生成给群友看的答案。不要输出思维过程。",
+						content: PROACTIVE_JUDGE_SYSTEM_PROMPT,
 					},
 				],
 			);

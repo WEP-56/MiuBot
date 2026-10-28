@@ -21,6 +21,8 @@ export type QqBotAdapterOptions = {
 	eventBus: PlatformEventBus;
 	/** 入站消息回调；由宿主接到会话编排。 */
 	onMessage: (message: QQBotInboundMessage) => void | Promise<void>;
+	/** 全局静默时不向宿主或插件分发平台事件。 */
+	acceptEvents?: () => boolean;
 	/** `ready` 事件派发后调用，宿主在此同步连接状态与 Bot 资料。 */
 	onReady?: (bot: QQBot) => void;
 	onError?: (error: unknown) => void;
@@ -58,15 +60,21 @@ export function attachQqBotEvents(options: QqBotAdapterOptions): void {
 	});
 
 	bot.on("message", async (_context, message) => {
+		if (options.acceptEvents && !options.acceptEvents()) return;
 		await options.onMessage(message);
 	});
 
 	// 生命周期事件：SDK 把未识别事件统一从 rawEvent 透传，这里归一化后交给事件总线。
 	bot.on("rawEvent", (context) => {
+		if (options.acceptEvents && !options.acceptEvents()) return;
 		void eventBus.emit(normalizeRawEvent(botId, context.eventType, context.data));
 	});
 
 	bot.on("interaction", async (_context, event) => {
+		if (options.acceptEvents && !options.acceptEvents()) {
+			await bot.acknowledgeInteraction(event.id, ACK_IGNORED).catch(() => {});
+			return;
+		}
 		const normalized = normalizeInteractionEvent(botId, event);
 		const handled = options.canHandleInteraction
 			? options.canHandleInteraction(normalized)

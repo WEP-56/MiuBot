@@ -5,6 +5,8 @@ import { handleAuthRoutes } from "./routes/auth.ts";
 import { handleChatRoutes } from "./routes/chat.ts";
 import { handleCommandRoutes } from "./routes/commands.ts";
 import { handleConfigRoutes } from "./routes/config.ts";
+import { handleGlobalSilenceRoutes } from "./routes/global-silence.ts";
+import { handleMemoryRoutes } from "./routes/memory.ts";
 import { handleOverviewRoutes } from "./routes/overview.ts";
 import { handlePersonaRoutes } from "./routes/personas.ts";
 import { handlePluginRoutes } from "./routes/plugins.ts";
@@ -34,8 +36,10 @@ const handlers: RouteHandler[] = [
 	handleToolRoutes,
 	handleOverviewRoutes,
 	handleProactiveRoutes,
+	handleGlobalSilenceRoutes,
 	handleStickerRoutes,
 	handleSchedulerRoutes,
+	handleMemoryRoutes,
 	handleSkillRoutes,
 	handlePersonaRoutes,
 	handleSessionRoutes,

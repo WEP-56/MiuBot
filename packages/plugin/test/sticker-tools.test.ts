@@ -2,6 +2,18 @@ import { describe, expect, it, vi } from "vitest";
 import { createStickerTools } from "../src/tools/stickers/tools.ts";
 
 describe("sticker tools", () => {
+	it("explains when social reactions should be searched and sent", () => {
+		const [search, send] = createStickerTools(
+			{ search: async () => [], get: async () => undefined, incrementUsage: async () => {} },
+			() => true,
+			async () => {},
+		);
+		expect(search.promptSnippet).toContain("庆祝好消息");
+		expect(search.promptSnippet).toContain("短意图词搜索");
+		expect(search.promptSnippet).toContain("不要硬发");
+		expect(send.promptSnippet).toContain("调用本工具一次");
+	});
+
 	it("enforces authorization and sends only approved search results", async () => {
 		const sticker = {
 			id: "sticker-1",

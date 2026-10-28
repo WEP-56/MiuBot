@@ -44,3 +44,17 @@ describe("群级冷却单位迁移", () => {
 		expect(config.proactiveGate.cooldownSeconds).toBe(600);
 	});
 });
+
+describe("全局静默配置迁移", () => {
+	it("老配置默认关闭静默，新字段仅接受有效时间", async () => {
+		expect((await loadWith({})).globalSilence).toEqual({ quietStart: "00:00", quietEnd: "00:00" });
+		expect((await loadWith({ globalSilence: { quietStart: "22:30", quietEnd: "06:00" } })).globalSilence).toEqual({
+			quietStart: "22:30",
+			quietEnd: "06:00",
+		});
+		expect((await loadWith({ globalSilence: { quietStart: "25:00", quietEnd: "06:00" } })).globalSilence).toEqual({
+			quietStart: "00:00",
+			quietEnd: "06:00",
+		});
+	});
+});

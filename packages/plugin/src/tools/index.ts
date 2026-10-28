@@ -44,6 +44,7 @@ export {
 	type LsToolOptions,
 } from "./ls.ts";
 export { McpRuntime, type McpServerConfig, type McpServerStatus } from "./mcp/runtime.ts";
+export { createMemoryTools, type SaveMemoryToolInput } from "./memory.ts";
 export {
 	createLocalPowerShellOperations,
 	createPowerShellTool,
@@ -102,6 +103,7 @@ import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "
 import { createImageGenTool, type ImageGenerationRequest } from "./image-gen.ts";
 import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./ls.ts";
 import type { McpRuntime } from "./mcp/runtime.ts";
+import { createMemoryTools, type SaveMemoryToolInput } from "./memory.ts";
 import { createPowerShellTool, createPowerShellToolDefinition, type PowerShellToolOptions } from "./powershell.ts";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.ts";
 import { type CreateScheduledTaskInput, createScheduleTaskTool } from "./schedule-task.ts";
@@ -147,6 +149,10 @@ export interface BuiltinToolsOptions<T extends StickerToolItem = StickerToolItem
 		createTask(input: CreateScheduledTaskInput): Promise<{ id: string; nextRunAt: string }>;
 		allowedTools(): string[];
 	};
+	memory?: {
+		read(query?: string): Promise<string>;
+		save(input: SaveMemoryToolInput): Promise<{ title: string; area: string }>;
+	};
 }
 
 export function createBuiltinTools<T extends StickerToolItem>(options: BuiltinToolsOptions<T>): ToolDefinition[] {
@@ -161,6 +167,7 @@ export function createBuiltinTools<T extends StickerToolItem>(options: BuiltinTo
 		...(options.scheduleTask
 			? [createScheduleTaskTool(options.scheduleTask.createTask, options.scheduleTask.allowedTools)]
 			: []),
+		...(options.memory ? createMemoryTools(options.memory) : []),
 		...(options.mcp?.getEnabledToolDefinitions() ?? []),
 	];
 }

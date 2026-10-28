@@ -11,6 +11,7 @@ import type { AuditLog } from "../audit.ts";
 import type { AuthService } from "../auth.ts";
 import type { CommandCatalogEntry } from "../commands/index.ts";
 import type { RuntimeLog } from "../logging.ts";
+import type { MemoryDreamService, MemoryStore } from "../memory.ts";
 import type { ProactiveDecision, ProactiveMetrics } from "../proactive.ts";
 import type { QqConnectionState, QrState } from "../qq/connection.ts";
 import type { AppConfig, QqBotConfig } from "../runtime.ts";
@@ -120,6 +121,8 @@ export type HttpContext = {
 		sentToday(): number;
 	};
 	scheduler: Scheduler;
+	memory: MemoryStore;
+	memoryDream: MemoryDreamService;
 	qq: {
 		states: Map<string, QqConnectionState>;
 		qr(): QrState;

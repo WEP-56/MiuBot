@@ -32,9 +32,9 @@ export function createStickerTools<T extends StickerToolItem>(
 			name: "search_stickers",
 			label: "Search Stickers",
 			description:
-				"Find approved stickers by communicative intent, mood, or action. Search with broad emotional/action words; results may be approximate matches. Only results returned by this tool can be sent.",
+				"为明确的社交回应搜索已审核表情包，例如庆祝、感谢、安慰、接玩笑或回应明显情绪。按想表达的情绪或动作搜索；只有本工具返回的结果可以发送。",
 			promptSnippet:
-				"When a sticker would make a reply warmer, funnier, or more expressive, actively search and send one. Search with a short broad mood/action (such as 开心、无语、安慰、鼓掌); do not require an exact visual or tag match. If no result appears, retry once with a broader word. Prefer a fitting sticker over saying none is suitable.",
+				"遇到这些社交场景时优先搜索并发送一个表情包：庆祝好消息、感谢、安慰、回应明显情绪、接轻松玩笑。用短意图词搜索，例如“庆祝”“感谢”“安慰”“开心”“无语”“鼓掌”，不要描述图片长什么样。结果不必完全匹配关键词，但含义必须合适。事实答复、日常信息、严肃/敏感/紧急话题不要发。找不到合适结果就用文字回复，不要硬发。",
 			parameters: searchSchema,
 			async execute(_id, params) {
 				const input = params as { query: string; limit?: number };
@@ -53,7 +53,7 @@ export function createStickerTools<T extends StickerToolItem>(
 												`id: ${item.id}\ndescription: ${item.description || "(no description)"}\ntags: ${item.tags.join(", ") || "(none)"}`,
 										)
 										.join("\n\n")
-								: "没有找到匹配结果。请改用更宽泛的情绪或动作词重试一次；仍无结果时再用文字回复。",
+								: "没有找到匹配结果。只有在换成一个更宽泛的意图词后仍可能找到合适表情时才重试；否则直接用文字回复，不要强行发送。",
 						},
 					],
 					details: { count: stickers.length },
@@ -64,9 +64,9 @@ export function createStickerTools<T extends StickerToolItem>(
 			name: "send_sticker",
 			label: "Send Sticker",
 			description:
-				"Send an approved sticker returned by search_stickers. A successful call sends the image to the current QQ conversation.",
+				"发送一张由 search_stickers 返回、且明显适合当前社交场景的已审核表情包。调用成功后图片会发到当前 QQ 对话。",
 			promptSnippet:
-				"After choosing a fitting search result, call this tool to actually send the image; do not merely describe or announce it.",
+				"社交回应场景下找到合适结果后，调用本工具一次来实际发送，不要只描述或声称发过；同一条回应不要连续发送多张表情包。",
 			parameters: sendSchema,
 			async execute(_id, params) {
 				const input = params as { id: string };

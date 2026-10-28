@@ -5,6 +5,7 @@ import { createFilePluginConfig, createFileStorage, createPluginHost, type Plugi
 import { McpRuntime } from "@miubot/plugin/tools/index";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createAgentHost, type AgentHost, type PeerConfig, type RuntimeSession } from "../src/agent-host.ts";
+import { createMemoryStore } from "../src/memory.ts";
 import { createDefaultConfig, type AppConfig } from "../src/runtime.ts";
 import { StickerStore } from "../src/stickers.ts";
 
@@ -111,6 +112,8 @@ beforeAll(async () => {
 		getConfig: () => config,
 		getPeerConfig: () => peerOverride,
 		getPromptContext: () => undefined,
+		getMemorySpeaker: () => ({ openId: "sender-1", name: "测试成员" }),
+		memoryStore: createMemoryStore(dataDir),
 		getStickerContext: () => undefined,
 		getSessions: () => [],
 		stickerStore: new StickerStore(dataDir),
@@ -169,6 +172,13 @@ describe("插件工具进入 Agent 会话", () => {
 			fallbackModelId: "",
 			useTools: false,
 			toolsOverride: null,
+			memory: {
+				enabled: false,
+				dreamEnabled: false,
+				dreamIntervalHours: 168,
+				dreamProviderId: "",
+				dreamModelId: "",
+			},
 			features: { activeReply: false },
 		};
 		const session = await agentHost.getAgentSession(runtimeSession({ id: "session-2" }));
@@ -190,6 +200,13 @@ describe("插件工具进入 Agent 会话", () => {
 			useTools: true,
 			// 全局是 ["read"]，这里改成只要网页搜索。
 			toolsOverride: ["web_search"],
+			memory: {
+				enabled: false,
+				dreamEnabled: false,
+				dreamIntervalHours: 168,
+				dreamProviderId: "",
+				dreamModelId: "",
+			},
 			features: { activeReply: false },
 		};
 		const session = await agentHost.getAgentSession(runtimeSession({ id: "session-4" }));
@@ -197,6 +214,44 @@ describe("插件工具进入 Agent 会话", () => {
 		expect(session.getActiveToolNames()).not.toContain("read");
 		// 插件工具跟着插件启停走，不跟着这个清单走。
 		expect(session.getActiveToolNames()).toContain("roll_dice");
+		peerOverride = undefined;
+	});
+
+	it("对象长期记忆工具受总开关与自定义白名单约束", async () => {
+		peerOverride = {
+			botId: "bot-1",
+			scope: "group",
+			peerId: "group-1",
+			name: "测试群",
+			personaId: "default",
+			providerId: "test-provider",
+			modelId: "test-model",
+			fallbackProviderId: "",
+			fallbackModelId: "",
+			useTools: true,
+			toolsOverride: null,
+			memory: {
+				enabled: true,
+				dreamEnabled: false,
+				dreamIntervalHours: 168,
+				dreamProviderId: "",
+				dreamModelId: "",
+			},
+			features: { activeReply: false },
+		};
+		const inherited = await agentHost.getAgentSession(runtimeSession({ id: "memory-inherited" }));
+		expect(inherited.getActiveToolNames()).toContain("read_memory");
+		expect(inherited.getActiveToolNames()).toContain("save_memory");
+
+		peerOverride.toolsOverride = ["read_memory"];
+		const custom = await agentHost.getAgentSession(runtimeSession({ id: "memory-custom" }));
+		expect(custom.getActiveToolNames()).toContain("read_memory");
+		expect(custom.getActiveToolNames()).not.toContain("save_memory");
+
+		peerOverride.useTools = false;
+		const disabled = await agentHost.getAgentSession(runtimeSession({ id: "memory-disabled" }));
+		expect(disabled.getActiveToolNames()).not.toContain("read_memory");
+		expect(disabled.getActiveToolNames()).not.toContain("save_memory");
 		peerOverride = undefined;
 	});
 });

@@ -33,4 +33,5 @@ export const toolNames: string[] = [...nativeToolNames, ...configurableToolNames
  *
  * 它们不会进 `config.tools.enabled`，但会话里可能出现，因此插件工具必须避让。
  */
-export const auxiliaryToolNames = ["load_skill", "search_stickers", "send_sticker"] as const;
+export const memoryToolNames = ["read_memory", "save_memory"] as const;
+export const auxiliaryToolNames = ["load_skill", "search_stickers", "send_sticker", ...memoryToolNames] as const;

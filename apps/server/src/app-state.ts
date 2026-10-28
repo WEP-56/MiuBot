@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { PeerConfig, RuntimeSession } from "./agent-host.ts";
+import type { PeerConfig, PeerMemorySettings, RuntimeSession } from "./agent-host.ts";
+import { LEGACY_DEFAULT_MEMORY_PROMPT } from "./memory-prompt.ts";
 import {
 	type AppConfig,
 	createDefaultConfig,
@@ -124,6 +125,7 @@ export function createAppState(options: { dataDir: string }): AppState {
 			fallbackModelId: "",
 			useTools: true,
 			toolsOverride: null,
+			memory: defaultPeerMemory(),
 			features: { activeReply: false, showToolActivity: false },
 		};
 	}
@@ -215,6 +217,18 @@ export function createAppState(options: { dataDir: string }): AppState {
 						: defaults.access.allowedPeers,
 				},
 				proactiveGate: migrateProactiveGate(defaults.proactiveGate, current.proactiveGate),
+				globalSilence: {
+					quietStart:
+						typeof current.globalSilence?.quietStart === "string" &&
+						/^([01]\d|2[0-3]):[0-5]\d$/.test(current.globalSilence.quietStart)
+							? current.globalSilence.quietStart
+							: defaults.globalSilence.quietStart,
+					quietEnd:
+						typeof current.globalSilence?.quietEnd === "string" &&
+						/^([01]\d|2[0-3]):[0-5]\d$/.test(current.globalSilence.quietEnd)
+							? current.globalSilence.quietEnd
+							: defaults.globalSilence.quietEnd,
+				},
 				mcpServers: Array.isArray(current.mcpServers) ? current.mcpServers : defaults.mcpServers,
 				plugins: {
 					enabled: Array.isArray(current.plugins?.enabled)
@@ -233,6 +247,10 @@ export function createAppState(options: { dataDir: string }): AppState {
 						? current.commands.disabled.filter((name): name is string => typeof name === "string")
 						: defaults.commands.disabled,
 				},
+				memoryPrompt:
+					typeof current.memoryPrompt === "string" && current.memoryPrompt !== LEGACY_DEFAULT_MEMORY_PROMPT
+						? current.memoryPrompt
+						: defaults.memoryPrompt,
 			};
 			if (!stored.qqBots && stored.qq) await saveConfig();
 			if (config.qqBots.filter((bot) => bot.enabled).length > 1) {
@@ -313,6 +331,7 @@ export function createAppState(options: { dataDir: string }): AppState {
 						toolsOverride: Array.isArray(item.toolsOverride)
 							? item.toolsOverride.filter((name): name is string => typeof name === "string")
 							: null,
+						memory: normalizePeerMemory(item.memory),
 						features: {
 							activeReply:
 								typeof item.features === "object" &&
@@ -348,6 +367,7 @@ export function createAppState(options: { dataDir: string }): AppState {
 					fallbackModelId: "",
 					useTools: true,
 					toolsOverride: null,
+					memory: defaultPeerMemory(),
 					features: { activeReply: false, showToolActivity: false },
 				});
 			}
@@ -442,5 +462,40 @@ export function createAppState(options: { dataDir: string }): AppState {
 			usage = next;
 		},
 		saveProactiveUsage,
+	};
+}
+
+function defaultPeerMemory(): PeerMemorySettings {
+	return {
+		enabled: false,
+		dreamEnabled: false,
+		dreamIntervalHours: 168,
+		dreamProviderId: "",
+		dreamModelId: "",
+		dreamLastError: "",
+	};
+}
+
+function normalizePeerMemory(value: unknown): PeerMemorySettings {
+	const defaults = defaultPeerMemory();
+	if (typeof value !== "object" || value === null) return defaults;
+	const saved = value as Partial<PeerMemorySettings>;
+	return {
+		enabled: saved.enabled === true,
+		dreamEnabled: saved.dreamEnabled === true,
+		dreamIntervalHours:
+			typeof saved.dreamIntervalHours === "number" && Number.isFinite(saved.dreamIntervalHours)
+				? Math.max(1, Math.min(8760, saved.dreamIntervalHours))
+				: defaults.dreamIntervalHours,
+		dreamProviderId: typeof saved.dreamProviderId === "string" ? saved.dreamProviderId : "",
+		dreamModelId: typeof saved.dreamModelId === "string" ? saved.dreamModelId : "",
+		...(typeof saved.dreamNextRunAt === "string" ? { dreamNextRunAt: saved.dreamNextRunAt } : {}),
+		...(typeof saved.dreamLastRunAt === "string" ? { dreamLastRunAt: saved.dreamLastRunAt } : {}),
+		...(saved.dreamLastStatus === "running" ||
+		saved.dreamLastStatus === "success" ||
+		saved.dreamLastStatus === "error"
+			? { dreamLastStatus: saved.dreamLastStatus }
+			: {}),
+		dreamLastError: typeof saved.dreamLastError === "string" ? saved.dreamLastError : "",
 	};
 }

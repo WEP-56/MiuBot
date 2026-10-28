@@ -133,6 +133,26 @@ describe("qq platform assembly", () => {
 		expect(sent).toEqual(["default"]);
 		expect(onEventError).toHaveBeenCalledOnce();
 	});
+
+	it("blocks outbound messages during global silence", async () => {
+		const { bot } = fakeQqBot();
+		let silenced = true;
+		const platform = createQqPlatform({
+			onEventError: vi.fn(),
+			onSendError: vi.fn(),
+			resolveBotId: () => "bot-1",
+			isSilenced: () => silenced,
+		});
+		const channel = platform.channelFor(bot);
+		expect(await channel.sendText({ scope: "group", targetId: "group-1" }, "quiet")).toEqual({
+			messages: 0,
+			fallbackUsed: false,
+		});
+		expect(bot.sendText).not.toHaveBeenCalled();
+		silenced = false;
+		await channel.sendText({ scope: "group", targetId: "group-1" }, "awake");
+		expect(bot.sendText).toHaveBeenCalledOnce();
+	});
 });
 
 describe("qq bot event attachment", () => {
@@ -273,5 +293,26 @@ describe("qq bot event attachment", () => {
 		const failure = new Error("gateway down");
 		handlers.get("error")?.(failure as never, undefined as never);
 		expect(onError).toHaveBeenCalledWith(failure);
+	});
+
+	it("does not dispatch messages, raw events, or interactions during global silence", async () => {
+		const platform = createQqPlatform({ onEventError: vi.fn(), onSendError: vi.fn(), resolveBotId: () => "bot-1" });
+		const { bot, handlers } = fakeQqBot();
+		const onMessage = vi.fn();
+		let accepting = false;
+		attachQqBotEvents({ bot, botId: "bot-1", eventBus: platform.eventBus, onMessage, acceptEvents: () => accepting });
+		const events: string[] = [];
+		platform.eventBus.subscribe("*", (event) => events.push(event.type));
+
+		await handlers.get("message")?.(undefined as never, inbound() as never);
+		handlers.get("rawEvent")?.({ eventType: "FRIEND_ADD", data: { openid: "u-1" } } as never, undefined as never);
+		await handlers.get("interaction")?.(
+			undefined as never,
+			{ id: "silent-interaction", scene: "c2c", user_openid: "u-1", data: { type: 11 } } as never,
+		);
+
+		expect(onMessage).not.toHaveBeenCalled();
+		expect(events).toEqual([]);
+		expect(bot.acknowledgeInteraction).toHaveBeenCalledWith("silent-interaction", 3);
 	});
 });

@@ -1,4 +1,5 @@
 import type { McpServerConfig } from "@miubot/plugin/tools/mcp/runtime";
+import { DEFAULT_MEMORY_PROMPT } from "./memory-prompt.ts";
 
 export type ModelConfig = {
 	id: string;
@@ -93,6 +94,7 @@ export type ProactiveGateSettings = {
 	judgeProviderId: string;
 	judgeModelId: string;
 };
+export type GlobalSilenceSettings = { quietStart: string; quietEnd: string };
 /**
  * 插件启停配置。
  *
@@ -127,6 +129,7 @@ export type AppConfig = {
 	access: AccessSettings;
 	mcpServers: McpServerConfig[];
 	proactiveGate: ProactiveGateSettings;
+	globalSilence: GlobalSilenceSettings;
 	plugins: PluginSettings;
 	/**
 	 * 管理员名单：QQ 用户 openid。**空 = 没有人能执行管理员命令**（安全默认）。
@@ -136,6 +139,8 @@ export type AppConfig = {
 	 */
 	admins: string[];
 	commands: CommandSettings;
+	/** 全局长期记忆行为 Prompt；记忆正文始终作为不可信资料注入。 */
+	memoryPrompt: string;
 };
 export type ChatMessage = { role: "user" | "assistant" | "system"; content: string };
 
@@ -215,10 +220,22 @@ export function createDefaultConfig(): AppConfig {
 			judgeProviderId: "",
 			judgeModelId: "",
 		},
+		globalSilence: { quietStart: "00:00", quietEnd: "00:00" },
 		plugins: { enabled: [], disabled: [] },
 		admins: [],
 		commands: { disabled: [] },
+		memoryPrompt: DEFAULT_MEMORY_PROMPT,
 	};
+}
+
+export function isGlobalSilenceActive(settings: GlobalSilenceSettings, now = new Date()): boolean {
+	if (settings.quietStart === settings.quietEnd) return false;
+	const current = now.getHours() * 60 + now.getMinutes();
+	const [startHour, startMinute] = settings.quietStart.split(":").map(Number);
+	const [endHour, endMinute] = settings.quietEnd.split(":").map(Number);
+	const start = startHour * 60 + startMinute;
+	const end = endHour * 60 + endMinute;
+	return start < end ? current >= start && current < end : current >= start || current < end;
 }
 
 export function evaluateProactiveGate(settings: ProactiveGateSettings, sentToday: number, now = new Date()): string[] {
@@ -243,6 +260,7 @@ export async function createChatCompletion(
 	modelId: string,
 	message: string,
 	history: ChatMessage[],
+	options: { signal?: AbortSignal } = {},
 ): Promise<{ ok: boolean; text?: string; error?: string; providerId?: string; modelId?: string }> {
 	const provider =
 		config.providers.find((item) => item.id === providerId) ?? config.providers.find((item) => item.enabled);
@@ -260,6 +278,7 @@ export async function createChatCompletion(
 				`${(provider.baseUrl ?? "https://api.anthropic.com").replace(/\/$/, "")}/v1/messages`,
 				{
 					method: "POST",
+					signal: options.signal,
 					headers: {
 						"content-type": "application/json",
 						"x-api-key": provider.apiKey,
@@ -283,6 +302,7 @@ export async function createChatCompletion(
 			`${(provider.baseUrl ?? "https://api.openai.com/v1").replace(/\/$/, "")}/chat/completions`,
 			{
 				method: "POST",
+				signal: options.signal,
 				headers: { "content-type": "application/json", authorization: `Bearer ${provider.apiKey}` },
 				body: JSON.stringify({
 					model: model.id,

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAppState } from "../src/app-state.ts";
+import { DEFAULT_MEMORY_PROMPT, LEGACY_DEFAULT_MEMORY_PROMPT } from "../src/memory-prompt.ts";
 
 const roots: string[] = [];
 
@@ -54,5 +55,17 @@ describe("图像提供商选择迁移", () => {
 		});
 
 		expect(config.tools.imageGen.providerId).toBe("");
+	});
+});
+
+describe("长期记忆提示迁移", () => {
+	it("将旧内置默认提示升级到新版规则", async () => {
+		const config = await loadWith({ memoryPrompt: LEGACY_DEFAULT_MEMORY_PROMPT });
+		expect(config.memoryPrompt).toBe(DEFAULT_MEMORY_PROMPT);
+	});
+
+	it("保留管理员自定义提示", async () => {
+		const config = await loadWith({ memoryPrompt: "自定义记忆规则" });
+		expect(config.memoryPrompt).toBe("自定义记忆规则");
 	});
 });

@@ -16,3 +16,6 @@ export const stickerSendContexts = new Map<string, StickerSendContext>();
 
 /** 当前对话的补充提示（发言人身份等），由 `agent-host` 拼进系统上下文。 */
 export const sessionPromptContexts = new Map<string, string>();
+
+/** 当前 Agent 轮次的可信发言者身份；Tools 只从这里取得群成员 OpenID。 */
+export const memorySpeakerContexts = new Map<string, { openId: string; name: string }>();

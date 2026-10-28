@@ -5,6 +5,7 @@ import QRCode from "qrcode";
 import { attachQqBotEvents } from "../platform/qq-adapter.ts";
 import type { createQqPlatform } from "../platform/runtime.ts";
 import type { AppConfig, QqBotConfig } from "../runtime.ts";
+import { isGlobalSilenceActive } from "../runtime.ts";
 
 export type QqConnectionState = {
 	phase: "disconnected" | "connecting" | "connected" | "error";
@@ -80,6 +81,7 @@ export function createQqConnection(deps: {
 				botId: id,
 				eventBus: platform.eventBus,
 				onMessage: (message) => onMessage(bot, botConfig, message),
+				acceptEvents: () => !isGlobalSilenceActive(getConfig().globalSilence),
 				// 「有插件订阅了交互」不等于「这个按钮有人认领」：由插件宿主按启用状态判断。
 				canHandleInteraction: () => pluginHost.hasActiveHandler("platform.interaction"),
 				onReady: (readyBot) => {

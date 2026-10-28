@@ -9,6 +9,8 @@ export type QqPlatformOptions = {
 	onEventError: (error: unknown, type: string, eventType: string) => void;
 	/** 发送失败日志出口。 */
 	onSendError: (error: unknown) => void;
+	/** 全局静默期用于同时拦截 Agent、插件和系统消息。 */
+	isSilenced?: () => boolean;
 	/** 由 Bot 实例反查配置 ID；查不到时退化为 `default`（单 Bot 场景无影响）。 */
 	resolveBotId: (bot: QQBot) => string | undefined;
 };
@@ -39,6 +41,7 @@ export function createQqPlatform(options: QqPlatformOptions): QqPlatform {
 		if (existing) return existing;
 		const channel = createOutboundChannel({
 			bot,
+			isSilenced: options.isSilenced,
 			onError: (error) => options.onSendError(error),
 			onSent: (info) => {
 				void eventBus.emit({

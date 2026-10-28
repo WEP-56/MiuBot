@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { PeerConfig } from "../../agent-host.ts";
-import { toolNames } from "../../tool-names.ts";
+import { memoryToolNames, toolNames } from "../../tool-names.ts";
 import type { HttpContext } from "../context.ts";
 import { publicSession, toolCatalog } from "../present.ts";
 import { body, json } from "../response.ts";
@@ -58,6 +58,11 @@ export async function handleSessionRoutes(
 			json(res, 404, { ok: false, message: "对象不存在" });
 			return true;
 		}
+		const peer = ctx.peers.get()[index];
+		if (peer) {
+			ctx.memoryDream.cancel(peer);
+			await ctx.memory.clear({ botId, scope, peerId });
+		}
 		ctx.peers.get().splice(index, 1);
 		ctx.agentHost.disposePeer(botId, scope, peerId, ctx.sessions.get());
 		ctx.sessions.replace(
@@ -91,7 +96,11 @@ export async function handleSessionRoutes(
 						models: models.map(({ id: modelId, name: modelName }) => ({ id: modelId, name: modelName })),
 					})),
 				// 与 Tools 页同一份目录：对象级覆盖只能从这些名字里选，两处各写一份必然漂移。
-				tools: toolCatalog.map(({ name, label, description }) => ({ name, label, description })),
+				tools: [
+					...toolCatalog.map(({ name, label, description }) => ({ name, label, description })),
+					{ name: "read_memory", label: "读取长期记忆", description: "读取当前对象可见的记忆" },
+					{ name: "save_memory", label: "保存长期记忆", description: "保存当前对象或当前发言者的记忆" },
+				],
 				// 切到「自定义」时的初始勾选：就是当前全局生效的那几个，而不是空集。
 				globalTools: [...config.tools.enabled],
 			});
@@ -133,7 +142,10 @@ export async function handleSessionRoutes(
 			}
 			const names: string[] = [];
 			for (const entry of input.toolsOverride) {
-				if (typeof entry !== "string" || !toolNames.includes(entry)) {
+				if (
+					typeof entry !== "string" ||
+					(!toolNames.includes(entry) && !memoryToolNames.includes(entry as (typeof memoryToolNames)[number]))
+				) {
 					json(res, 400, { ok: false, message: `未知的内置工具：${String(entry)}` });
 					return true;
 				}
@@ -142,6 +154,70 @@ export async function handleSessionRoutes(
 			toolsOverride = [...new Set(names)];
 		}
 
+		const rawMemory =
+			typeof input.memory === "object" && input.memory !== null ? (input.memory as Record<string, unknown>) : {};
+		const currentMemory = current?.memory ?? {
+			enabled: false,
+			dreamEnabled: false,
+			dreamIntervalHours: 168,
+			dreamProviderId: "",
+			dreamModelId: "",
+			dreamLastError: "",
+		};
+		const dreamEnabled =
+			rawMemory.dreamEnabled === undefined ? currentMemory.dreamEnabled : rawMemory.dreamEnabled === true;
+		const dreamProviderId = String(rawMemory.dreamProviderId ?? currentMemory.dreamProviderId).trim();
+		const dreamModelId = String(rawMemory.dreamModelId ?? currentMemory.dreamModelId).trim();
+		if (Boolean(dreamProviderId) !== Boolean(dreamModelId)) {
+			json(res, 400, { ok: false, message: "后台整理需要同时选择提供商和模型，或都留空" });
+			return true;
+		}
+		if (dreamEnabled && (!dreamProviderId || !dreamModelId)) {
+			json(res, 400, { ok: false, message: "启用后台整理前，请先选择整理模型" });
+			return true;
+		}
+		if (dreamProviderId && dreamModelId) {
+			const dreamProvider = config.providers.find(
+				(item) => item.id === dreamProviderId && item.enabled && item.apiKey,
+			);
+			if (!dreamProvider?.models.some((item) => item.id === dreamModelId)) {
+				json(res, 400, { ok: false, message: "整理模型不可用：请选择已启用且有 API Key 的提供商与模型" });
+				return true;
+			}
+		}
+		const intervalHours = Number(rawMemory.dreamIntervalHours ?? currentMemory.dreamIntervalHours);
+		if (!Number.isFinite(intervalHours) || intervalHours < 1 || intervalHours > 8760) {
+			json(res, 400, { ok: false, message: "整理间隔需为 1 至 8760 小时" });
+			return true;
+		}
+		const memoryEnabled = rawMemory.enabled === undefined ? currentMemory.enabled : rawMemory.enabled === true;
+		const settingsChanged =
+			memoryEnabled !== currentMemory.enabled ||
+			dreamEnabled !== currentMemory.dreamEnabled ||
+			dreamProviderId !== currentMemory.dreamProviderId ||
+			dreamModelId !== currentMemory.dreamModelId ||
+			intervalHours !== currentMemory.dreamIntervalHours;
+		const memory = {
+			enabled: memoryEnabled,
+			dreamEnabled,
+			dreamIntervalHours: intervalHours,
+			dreamProviderId,
+			dreamModelId,
+			dreamLastRunAt: currentMemory.dreamLastRunAt,
+			dreamLastStatus: currentMemory.dreamLastStatus,
+			dreamLastError: currentMemory.dreamLastError ?? "",
+			dreamNextRunAt:
+				!memoryEnabled || !dreamEnabled
+					? undefined
+					: settingsChanged || !currentMemory.dreamNextRunAt
+						? new Date(Date.now() + intervalHours * 60 * 60 * 1000).toISOString()
+						: currentMemory.dreamNextRunAt,
+		};
+		if (settingsChanged && current) ctx.memoryDream.cancel(current);
+		if (!memoryEnabled || !dreamEnabled) {
+			memory.dreamLastStatus = currentMemory.dreamLastStatus === "running" ? "error" : currentMemory.dreamLastStatus;
+			memory.dreamLastError = currentMemory.dreamLastStatus === "running" ? "整理已暂停" : memory.dreamLastError;
+		}
 		const rawFeatures =
 			typeof input.features === "object" && input.features !== null
 				? (input.features as Record<string, unknown>)
@@ -158,6 +234,7 @@ export async function handleSessionRoutes(
 			fallbackModelId,
 			useTools: input.useTools !== false,
 			toolsOverride,
+			memory,
 			features: {
 				activeReply: rawFeatures.activeReply === true,
 				showToolActivity: rawFeatures.showToolActivity === true,

@@ -15,6 +15,8 @@ export interface OutboundChannelDependencies {
 	bot: QQBot;
 	/** 单条消息被动回复次数上限，耗尽后自动降级主动推送。 */
 	passiveReplyLimit?: number;
+	/** 全局静默期间阻止任何出站消息。 */
+	isSilenced?: () => boolean;
 	/** 被动回复有效期。 */
 	passiveReplyTtlMs?: number;
 	onError?: (error: unknown, target: ReplyTarget) => void;
@@ -237,11 +239,14 @@ export function createOutboundChannel(deps: OutboundChannelDependencies): Outbou
 		options: OutboundTextOptions = {},
 		meta: OutboundOriginMeta = {},
 	): Promise<OutboundMessageResult> {
+		if (deps.isSilenced?.()) return { messages: 0, fallbackUsed: false };
 		const chunkLimit = options.chunkLimit ?? 5000;
 		const allowFallback = options.allowProactiveFallback !== false;
 		const chunks = chunkText(content, chunkLimit);
 		let fallbackUsed = false;
+		let messages = 0;
 		for (const [index, chunk] of chunks.entries()) {
+			if (deps.isSilenced?.()) break;
 			let sendTarget = target;
 			if (!limiter.canReply(target)) {
 				if (!allowFallback) throw new Error("被动回复配额已耗尽，且不允许主动推送降级");
@@ -263,9 +268,10 @@ export function createOutboundChannel(deps: OutboundChannelDependencies): Outbou
 				throw error;
 			}
 			limiter.record(target);
+			messages += 1;
 		}
-		const result = { messages: chunks.length, fallbackUsed };
-		deps.onSent?.({ target, kind: options.markdown ? "markdown" : "text", ...result, ...meta });
+		const result = { messages, fallbackUsed };
+		if (messages > 0) deps.onSent?.({ target, kind: options.markdown ? "markdown" : "text", ...result, ...meta });
 		return result;
 	}
 
@@ -283,6 +289,7 @@ export function createOutboundChannel(deps: OutboundChannelDependencies): Outbou
 		media: OutboundMedia,
 		meta: OutboundOriginMeta = {},
 	): Promise<OutboundMessageResult> {
+		if (deps.isSilenced?.()) return { messages: 0, fallbackUsed: false };
 		let sendTarget = target;
 		let fallbackUsed = false;
 		if (!limiter.canReply(target)) {
@@ -314,7 +321,7 @@ export function createOutboundChannel(deps: OutboundChannelDependencies): Outbou
 	 * 时返回 `supported: false`，由调用方回退到普通文本发送。
 	 */
 	function openStream(target: ReplyTarget): OutboundStream {
-		if (target.scope !== "c2c" || !target.msgId || !limiter.canReply(target)) {
+		if (deps.isSilenced?.() || target.scope !== "c2c" || !target.msgId || !limiter.canReply(target)) {
 			return {
 				supported: false,
 				update: async () => {},
@@ -327,6 +334,10 @@ export function createOutboundChannel(deps: OutboundChannelDependencies): Outbou
 		return {
 			supported: true,
 			update: async (fullText: string) => {
+				if (deps.isSilenced?.()) {
+					session.cancel();
+					return;
+				}
 				try {
 					await session.update(fullText);
 				} catch (error) {
@@ -335,6 +346,10 @@ export function createOutboundChannel(deps: OutboundChannelDependencies): Outbou
 				}
 			},
 			complete: async () => {
+				if (deps.isSilenced?.()) {
+					session.cancel();
+					return;
+				}
 				try {
 					await session.complete();
 				} catch (error) {

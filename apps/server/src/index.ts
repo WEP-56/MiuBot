@@ -19,14 +19,16 @@ import type { HttpContext } from "./http/context.ts";
 import { createRequestHandler } from "./http/server.ts";
 import { createWebAssets } from "./http/static.ts";
 import { createRuntimeLogger } from "./logging.ts";
+import { createMemoryDreamService, createMemoryStore } from "./memory.ts";
 import { isPeerKey } from "./peer-key.ts";
 import { createInboundReferenceStore, createPluginLogger, createPluginSendBridge } from "./platform/plugin-bridge.ts";
 import { createQqPlatform } from "./platform/runtime.ts";
 import { createProactive } from "./proactive.ts";
 import { createQqConnection, type QqConnection } from "./qq/connection.ts";
 import { createInboundHandler } from "./qq/inbound.ts";
+import { isGlobalSilenceActive } from "./runtime.ts";
 import { createScheduler } from "./scheduler.ts";
-import { sessionPromptContexts, stickerSendContexts } from "./session-context.ts";
+import { memorySpeakerContexts, sessionPromptContexts, stickerSendContexts } from "./session-context.ts";
 import { createStickerTagging } from "./sticker-tagging.ts";
 import { StickerStore } from "./stickers.ts";
 import { enqueueForTarget } from "./target-queue.ts";
@@ -135,6 +137,7 @@ const updates = createUpdateChecker({
 });
 
 const state = createAppState({ dataDir });
+const memoryStore = createMemoryStore(dataDir);
 const stickerStore = new StickerStore(dataDir);
 const mcpRuntime = new McpRuntime();
 
@@ -173,6 +176,7 @@ let connection: QqConnection;
 let agentHost: ReturnType<typeof createAgentHost>;
 const scheduler = createScheduler({
 	dataDir,
+	isPaused: () => isGlobalSilenceActive(state.getConfig().globalSilence),
 	getSession: (id) => state.getSessions().find((session) => session.id === id),
 	getAllowedTools: (id) => {
 		const session = state.getSessions().find((item) => item.id === id);
@@ -180,6 +184,7 @@ const scheduler = createScheduler({
 	},
 	execute: async (task) => {
 		const session = state.getSessions().find((item) => item.id === task.sessionId);
+		if (isGlobalSilenceActive(state.getConfig().globalSilence)) return;
 		if (!session) throw new Error("绑定的会话不存在");
 		const bot = connection.client(session.botId);
 		if (!bot) throw new Error("绑定会话的 QQ Bot 未连接");
@@ -256,6 +261,7 @@ const platform = createQqPlatform({
 		),
 	onSendError: (error) => log("WARN", `发送消息失败：${error instanceof Error ? error.message : String(error)}`),
 	resolveBotId: (bot) => state.getConfig().qqBots.find((item) => connection.client(item.id) === bot)?.id,
+	isSilenced: () => isGlobalSilenceActive(state.getConfig().globalSilence),
 });
 /** 入站消息引用：让插件回复尽量走被动回复，而不是主动推送。 */
 const inboundReferences = createInboundReferenceStore();
@@ -319,6 +325,8 @@ agentHost = createAgentHost({
 	getConfig: state.getConfig,
 	getPeerConfig: state.getPeerConfig,
 	getPromptContext: (sessionId) => sessionPromptContexts.get(sessionId),
+	getMemorySpeaker: (sessionId) => memorySpeakerContexts.get(sessionId),
+	memoryStore,
 	getStickerContext: (sessionId) => stickerSendContexts.get(sessionId),
 	getSessions: state.getSessions,
 	stickerStore,
@@ -330,6 +338,14 @@ agentHost = createAgentHost({
 	disableNativeTools,
 	log: (level, text) => log(level, text),
 	createScheduledTask: (sessionId, input) => scheduler.createTask({ ...input, sessionId }),
+});
+const memoryDream = createMemoryDreamService({
+	store: memoryStore,
+	getPeers: state.getPeers,
+	savePeers: state.savePeers,
+	getConfig: state.getConfig,
+	isBusy: () => agentHost?.anyAgentLoopRunning() ?? false,
+	log,
 });
 const stickerTagging = createStickerTagging({
 	getConfig: state.getConfig,
@@ -423,6 +439,8 @@ const httpContext: HttpContext = {
 	commands: { list: commandRegistry.list },
 	proactive: { metrics: proactive.metrics, decisions: proactive.decisions, sentToday: proactive.sentToday },
 	scheduler,
+	memory: memoryStore,
+	memoryDream,
 	qq: {
 		states: connection.states,
 		qr: connection.qr,
@@ -467,6 +485,7 @@ log("INFO", `插件加载完成：${activePluginCount}/${discoveredPlugins.lengt
 
 const activeBot = state.getConfig().qqBots.find((bot) => bot.enabled);
 scheduler.start();
+memoryDream.start();
 if (activeBot?.appId && activeBot.appSecret) void connection.connect(activeBot);
 
 log("INFO", `Miubot ${version}`);
@@ -524,6 +543,7 @@ async function shutdown(signal: string): Promise<void> {
 	log("INFO", `收到 ${signal}，正在退出`);
 	for (const bot of state.getConfig().qqBots) connection.stop(bot.id);
 	scheduler.stop();
+	memoryDream.stop();
 	await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
 	log("INFO", "Miubot Server 已停止");
 	// 最后一行日志也要落盘：flush 放在「已停止」之后。
