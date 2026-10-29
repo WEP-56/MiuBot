@@ -7,13 +7,13 @@ import type { Settings } from "../shared/ipc.ts";
 /**
  * 桌面端的所有本地路径与设置读写。
  *
- * 布局（`app.getPath("userData")`，即 `%APPDATA%\miubot-desktop` 之下）：
+ * 布局（`%APPDATA%\MiuBot Desktop\` 之下）：
  *
  * ```
  * versions/<版本>/...   解压后的服务端代码；每个版本一个独立目录，升级 = 换目录
  * data/                 MIUBOT_DATA_DIR，唯一跨版本共享的目录
  * downloads/            下载中的临时文件；成功解压后删除
- * desktop.log          启动器自己的日志
+ * desktop.log           启动器自己的日志
  * settings.json         当前版本、端口等
  * ```
  *

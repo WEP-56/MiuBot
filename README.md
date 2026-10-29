@@ -11,7 +11,20 @@
 
 ## 开始
 
-### 本地使用
+### 本机使用（Windows，推荐）
+
+下载 [最新 Release](https://github.com/WEP-56/MiuBot/releases/latest) 里的
+`MiuBot-Desktop-Setup-<版本>-x64.exe`，安装后打开 **MiuBot Desktop**。
+
+首次打开还没有服务端：在「服务端版本」里点**下载**，下完点**启用**，再点**启动服务**。
+控制台会自动打开；以后也可以从首页的「控制台」按钮进入。
+
+首次启动会生成一个管理员口令，桌面端会弹窗显示**一次**（不写日志），请立刻记下或改掉。
+
+数据存放在 `%APPDATA%\MiuBot Desktop\`：`data\` 是配置与会话（跨版本共享，升级不受影响），
+`versions\` 是各个已下载的服务端版本。卸载不会删这个目录。
+
+只想自己跑、不装桌面端的话，也可以直接用源码：
 
 ```bash
 npm install --ignore-scripts
@@ -19,8 +32,8 @@ npm run dev --workspace=@miubot/server   # http://127.0.0.1:8787（同时托管�
 npm run dev --workspace=@miubot/web      # http://127.0.0.1:5173（热更新，/api 代理到服务端）
 ```
 
-首次启动会打印一次管理员口令，散列存在 `<数据目录>/admin-password`；之后用该口令登录工作台。
-数据目录默认 `apps/server/.miubot/`。
+此时数据目录默认 `apps/server/.miubot/`，管理员口令打印在服务端控制台里。
+桌面端的详细说明见 [apps/desktop/README.md](apps/desktop/README.md)。
 
 ### 部署到服务器
 
