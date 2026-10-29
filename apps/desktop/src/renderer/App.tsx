@@ -66,12 +66,21 @@ export function App() {
 		setReleaseError(list.error);
 	}, []);
 
+	/**
+	 * 把主进程的设置与运行状态重新拉一遍。
+	 *
+	 * 安装、启用、删除都会改变「哪些版本可用 / 哪个是当前版本」，而这些判定都在主进程里。
+	 * 界面不重取一次，就会出现「磁盘上已经启用，启动按钮却还是灰的」这种自相矛盾的状态。
+	 */
+	const syncFromMain = useCallback(async () => {
+		const state = await window.miubot.getState();
+		setService(state.service);
+		setSettings(state.settings);
+		setDesktop(state.desktop);
+	}, []);
+
 	useEffect(() => {
-		void window.miubot.getState().then((state) => {
-			setService(state.service);
-			setSettings(state.settings);
-			setDesktop(state.desktop);
-		});
+		void syncFromMain();
 		void loadReleases();
 
 		const offState = window.miubot.onState((next) => setService(next));
@@ -85,7 +94,7 @@ export function App() {
 			offProgress();
 			offLog();
 		};
-	}, [loadReleases]);
+	}, [loadReleases, syncFromMain]);
 
 	// 日志固定滚到底部：启动失败的现场就在最后几行。每次日志变化都滚，所以只需 logs。
 	// biome-ignore lint/correctness/useExhaustiveDependencies: 故意只在 logs 变化时滚动
@@ -104,6 +113,9 @@ export function App() {
 		try {
 			const result = await action();
 			if (!result.ok) setNotice(result.message);
+			// 成功后必须重新同步：启用改了 activeVersion、安装改了版本列表，
+			// 两者都会影响按钮的可用性。
+			await Promise.all([syncFromMain(), loadReleases()]);
 		} finally {
 			setBusy(null);
 		}

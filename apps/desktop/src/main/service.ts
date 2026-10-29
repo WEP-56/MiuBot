@@ -46,6 +46,13 @@ export type Service = {
 	start(): Promise<{ ok: true } | { ok: false; message: string }>;
 	stop(): Promise<void>;
 	dismissPassword(): void;
+	/**
+	 * 清掉「上次运行的是哪个版本」这类残留信息，回到初始的停止态。
+	 *
+	 * 切换启用版本时用：进程已经停了，但界面头部还在显示旧版本号，
+	 * 会让「当前启用版本」与「运行版本」看起来互相矛盾。
+	 */
+	reset(): void;
 	dispose(): Promise<void>;
 };
 
@@ -200,6 +207,19 @@ export function createService(options: ServiceOptions): Service {
 		start,
 		stop,
 		dismissPassword: () => setState({ generatedPassword: null }),
+		reset: () => {
+			// 只有进程确实不在跑时才允许清：否则会把「运行中」抹成「已停止」，界面随之失真。
+			if (child) return;
+			setState({
+				phase: "stopped",
+				version: null,
+				port: null,
+				url: null,
+				error: null,
+				generatedPassword: null,
+				startedAt: null,
+			});
+		},
 		dispose,
 	};
 }

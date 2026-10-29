@@ -221,6 +221,9 @@ async function activateVersion(version: string): Promise<{ ok: true } | { ok: fa
 	if (service.state().phase !== "stopped") await service.stop();
 	settings = { ...settings, activeVersion: version };
 	await writeSettings(paths, settings);
+	// 停止后 `service.version` 里还留着上次运行的版本号；不清掉，界面头部会显示
+	// 一个与「当前启用版本」不符的旧值。
+	service.reset();
 	return { ok: true };
 }
 
