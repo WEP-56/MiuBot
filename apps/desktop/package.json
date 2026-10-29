@@ -1,0 +1,27 @@
+{
+	"name": "@miubot/desktop",
+	"version": "0.5.0",
+	"private": true,
+	"type": "module",
+	"description": "MiuBot Desktop：Windows 服务端启动器与版本管理器",
+	"main": "./dist/main/index.cjs",
+	"scripts": {
+		"dev": "node scripts/build.mjs && electron .",
+		"build": "node scripts/build.mjs",
+		"dist": "node scripts/build.mjs && electron-builder --win --publish never",
+		"check": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@types/react": "19.2.7",
+		"@types/react-dom": "19.2.3",
+		"@vitejs/plugin-react": "5.1.1",
+		"electron": "45.1.0",
+		"electron-builder": "26.18.0",
+		"esbuild": "0.27.7",
+		"extract-zip": "2.0.1",
+		"react": "19.2.6",
+		"react-dom": "19.2.6",
+		"typescript": "5.9.3",
+		"vite": "7.3.2"
+	}
+}

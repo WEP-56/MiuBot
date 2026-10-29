@@ -16,6 +16,10 @@ packages/provider/src/providers/.model-generation-*/
 # Release metadata written by CI when packaging (never committed)
 VERSION
 
+# 桌面端：下载下来的 Node 运行时（86 MB）与 electron-builder 产物，都不入库
+apps/desktop/.node/
+apps/desktop/release/
+
 # Environment
 .env
 

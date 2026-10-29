@@ -55,3 +55,9 @@ jobs:
 
       - name: 工作台类型检查
         run: npm run check --workspace=@miubot/web
+
+      # 桌面端有自己的 tsconfig（主进程是 Node 环境、渲染层是 DOM 环境，与根配置不同），
+      # 根 `npm run check` 覆盖不到，得单独跑。这里只做类型检查、不构建安装包：
+      # electron-builder 的产物由 release.yml 在 windows-latest 上出。
+      - name: 桌面端类型检查
+        run: npm run check --workspace=@miubot/desktop

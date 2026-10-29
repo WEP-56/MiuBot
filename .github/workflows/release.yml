@@ -125,8 +125,121 @@ jobs:
             echo
             echo "- 镜像：\`${{ env.IMAGE }}:${{ github.ref_name }}\`（去掉 v 的版本号亦可）"
             echo "- 源码包：\`miubot-$GITHUB_REF_NAME.tar.gz\`"
+            echo "- 桌面端：\`MiuBot-Desktop-Setup-$GITHUB_REF_NAME.exe\`"
+            echo "- 桌面端用的服务包：\`miubot-win-x64-$GITHUB_REF_NAME.zip\`"
             echo
             echo '```bash'
             echo 'docker compose pull && docker compose up -d'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Windows 服务包 + 桌面端安装包。
+  #
+  # 两件产物是一对：桌面端自己只带壳（Electron + 官方 Node 运行时），服务端代码按版本
+  # 从 release 下载。所以服务包必须单独出，且文件名要能被桌面端认出来
+  # （`releases.ts` 里的 SERVICE_ASSET_PATTERN）。
+  #
+  # 为什么要在 Windows runner 上跑：`npm ci` 装出来的 `@miubot/*` 是 junction，
+  # zip 存不下，打包前必须删掉、由桌面端解压后重建（见 `apps/desktop/src/main/relink.ts`）。
+  # 这套流程只在 Windows 上成立，也只能在 Windows 上验证。
+  desktop:
+    needs: verify
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      # 服务端 `engines.node` 是 >=22.19；桌面端把这份 node.exe 一起打包，
+      # 所以这里必须装「要发出去的那个版本」，不是 runner 自带的那个。
+      - name: 下载共用的 Node 运行时
+        shell: pwsh
+        run: node apps/desktop/scripts/fetch-node.mjs
+
+      - name: 构建工作台
+        run: npm run build --workspace=@miubot/web
+
+      # 只装服务端需要的 workspace：挤出 web 的构建依赖，产物从 93 MB 掉到 78 MB 左右。
+      - name: 准备服务包内容
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = "dist/service/miubot-win-x64-${{ github.ref_name }}"
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          # VERSION 让服务端在运行时知道自己是哪个版本（`resolveVersion()` 的第二优先级）。
+          Set-Content -Path "$stage/VERSION" -Value "${{ github.ref_name }}".TrimStart("v")
+          foreach ($dir in @("apps", "packages", "plugins")) {
+            if (Test-Path $dir) {
+              robocopy $dir "$stage/$dir" /E /XD node_modules .miubot desktop /XF *.log /NFL /NDL /NJH /NJS /NP
+              if ($LASTEXITCODE -ge 8) { throw "robocopy $dir 失败：$LASTEXITCODE" }
+            }
+          }
+          # `apps/web/dist`（预构建的工作台）已在上面随 apps 一起复制：服务端要托管它。
+          if (-not (Test-Path "$stage/apps/web/dist/index.html")) { throw "缺少 apps/web/dist/index.html" }
+          Copy-Item package.json, package-lock.json $stage
+          Push-Location $stage
+          npm install --omit=dev --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw "npm install 失败：$LASTEXITCODE" }
+          Pop-Location
+          # junction 进不了 zip：删掉，桌面端解压后会重建（这是它能跑起来的前提）。
+          Get-ChildItem "$stage/node_modules/@miubot" -ErrorAction SilentlyContinue | ForEach-Object {
+            cmd /c rmdir "$($_.FullName)" 2>$null
+          }
+          if ((Get-ChildItem "$stage/node_modules/@miubot" -ErrorAction SilentlyContinue).Count -ne 0) {
+            throw "node_modules/@miubot 里还有残留，junction 没删干净"
+          }
+
+      - name: 打包服务包并算摘要
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $name = "miubot-win-x64-${{ github.ref_name }}"
+          Compress-Archive -Path "dist/service/$name" -DestinationPath "dist/$name.zip" -CompressionLevel Optimal
+          $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path "dist/$name.zip.sha256" -Value "$hash  $name.zip"
+          Get-ChildItem dist -File | Select-Object Name, @{n = "MB"; e = { [math]::Round($_.Length / 1MB, 2) } }
+
+      - name: 构建桌面端安装包
+        shell: pwsh
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          $ErrorActionPreference = "Stop"
+          # 版本号来自根 package.json（发版提交里已经跟 tag 一起递增），
+          # build.mjs 会把它注入主进程并同步到 apps/desktop/package.json。
+          # 这里不需要另外 `npm version`：多一步只会多一处能对不上的版本来源。
+          npm run build --workspace=@miubot/desktop
+          # electron 的二进制是 install 脚本下的；根 npm ci 用了 --ignore-scripts，得手动补。
+          node node_modules/electron/install.js
+          npx electron-builder --win --publish never --projectDir apps/desktop
+          Get-ChildItem apps/desktop/release -File | Select-Object Name, @{n = "MB"; e = { [math]::Round($_.Length / 1MB, 2) } }
+
+      - name: 上传到 Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $files = @(Get-ChildItem "dist/*.zip" | ForEach-Object { $_.FullName })
+          $files += @(Get-ChildItem "apps/desktop/release/*.exe" | ForEach-Object { $_.FullName })
+          # `package` job 可能先建好 release，也可能后建；两种顺序都要能接上。
+          if (gh release view "${{ github.ref_name }}" 2>$null) {
+            gh release upload "${{ github.ref_name }}" @files --clobber
+          } else {
+            gh release create "${{ github.ref_name }}" @files --title "Miubot ${{ github.ref_name }}" --generate-notes
+          }
+
+      - name: 上传工作流产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ github.ref_name }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+            apps/desktop/release/*.exe
+          retention-days: 7

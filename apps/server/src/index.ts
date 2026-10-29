@@ -561,6 +561,26 @@ async function shutdown(signal: string): Promise<void> {
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));
 
+/**
+ * 桌面端（`apps/desktop`）的停止通道。
+ *
+ * Windows 没有能把 SIGTERM 投递给子进程的办法：`child.kill()` 就是 TerminateProcess，
+ * 信号处理器不会跑，上面那段优雅退出（断 Gateway → 关端口 → 落盘）等于不存在。
+ * 因此改由启动器往 stdin 写一行 `shutdown`，这里读到就走同一条 `shutdown()`。
+ *
+ * 默认关闭：systemd / docker 下 stdin 是 /dev/null 或会立刻 EOF，不该被误读成指令；
+ * 只有显式设置 `MIUBOT_CONTROL_STDIO=1`（桌面端会设）时才挂监听。
+ */
+if (isEnabled(process.env.MIUBOT_CONTROL_STDIO)) {
+	process.stdin.setEncoding("utf8");
+	process.stdin.on("data", (chunk: string) => {
+		if (chunk.includes("shutdown")) void shutdown("stdin");
+	});
+	// 启动器崩溃时管道会被关掉：EPIPE 不该把服务进程一起带走。
+	process.stdin.on("error", () => undefined);
+	process.stdin.resume();
+}
+
 /** 逗号分隔的环境变量列表；去掉空白与空项。 */
 function splitList(value: string | undefined): string[] {
 	return (value ?? "")
@@ -573,6 +593,17 @@ function splitList(value: string | undefined): string[] {
 function isDisabled(value: string | undefined): boolean {
 	const normalized = value?.trim().toLowerCase();
 	return normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off";
+}
+
+/**
+ * `1` / `true` / `yes` / `on` 视为开启；未设置视为**关闭**。
+ *
+ * 与 `isDisabled` 的默认值相反，用于「必须显式打开」的开关（如 `MIUBOT_CONTROL_STDIO`）：
+ * 这类开关打开后会改变进程的外部控制面，默认开启比默认关闭危险。
+ */
+function isEnabled(value: string | undefined): boolean {
+	const normalized = value?.trim().toLowerCase();
+	return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
 /**

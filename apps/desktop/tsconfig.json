@@ -1,0 +1,29 @@
+{
+	// 独立配置，不继承根 tsconfig.base.json：
+	// 根配置是服务端/包用的（Node16 + types: node + 无 DOM），而桌面端主进程是 Node 环境、
+	// 渲染层是浏览器环境，同一个工程里必须同时有 DOM 与 node 类型。这和 apps/web 的做法一致：
+	// 每个 app 自己管自己的编译环境，根 `npm run check` 只覆盖 packages 与 apps/server。
+	"compilerOptions": {
+		"target": "ES2023",
+		"lib": ["ES2023", "DOM", "DOM.Iterable"],
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"jsx": "react-jsx",
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		"skipLibCheck": true,
+		"esModuleInterop": true,
+		"resolveJsonModule": true,
+		"allowImportingTsExtensions": true,
+		"isolatedModules": true,
+		"verbatimModuleSyntax": true,
+		"erasableSyntaxOnly": true,
+		"noEmit": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"noFallthroughCasesInSwitch": true,
+		"types": ["node"]
+	},
+	"include": ["src", "vite.config.ts"],
+	"exclude": ["dist", "release"]
+}

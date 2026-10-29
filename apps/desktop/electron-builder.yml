@@ -1,0 +1,46 @@
+# electron-builder 配置：只发 Windows，NSIS 安装包。
+#
+# 未签名：项目开源，SmartScreen 提示由用户接受；签名需要付费证书与密钥托管，不在当前范围。
+appId: com.miubot.desktop
+productName: MiuBot Desktop
+copyright: MiuBot
+
+directories:
+  output: release
+  buildResources: build
+
+# 打包内容：`dist/` 是 esbuild + vite 的产物，`extract-zip` 已被内联进主进程，
+# 所以不需要任何 node_modules。少一层 node_modules 也让 asar 更小、启动更快。
+files:
+  - dist/**/*
+  - package.json
+  - "!**/*.map"
+
+# 共用的 Node 运行时：放在 resources/node/ 下，所有服务端版本共用一份。
+# 见 src/main/paths.ts 里的说明——按版本各带一份要让每个版本多 86 MB。
+extraResources:
+  - from: .node
+    to: node
+    filter:
+      - "**/*"
+
+# 产物名用连字符：GitHub Release 的下载链接里带空格会被编码成 %20，命令行与脚本都不好用。
+artifactName: "MiuBot-Desktop-Setup-${version}-${arch}.${ext}"
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # 图标：把 `build/icon.ico`（256×256）放进来即自动生效，无需改这里；
+  # 没有时 electron-builder 会退回默认 Electron 图标并给出提示。
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: MiuBot Desktop
+  # 卸载时保留用户数据（versions / data / settings.json）：重装不该丢配置。
+  deleteAppDataOnUninstall: false

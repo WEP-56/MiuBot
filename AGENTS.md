@@ -6,6 +6,7 @@
 apps/
   server/          运行时进程：HTTP/WS API、平台适配器装配（建设中）
   web/             Web 工作台（Vite + React，建设中）
+  desktop/         Windows 启动器与版本管理器（Electron；不含机器人逻辑）
 packages/
   shared/          通用契约与工具：路径、进程、文本、终端兼容类型
   provider/        Provider Core：多协议模型调用（源自 Pi packages/ai）
@@ -30,6 +31,7 @@ packages/
   - `qq/connection.ts` 连接、扫码、连接状态；`qq/inbound.ts` 入站消息主流程；`proactive.ts` 群聊插话；`sticker-tagging.ts` 表情包自动打标。
   - `agent-host.ts` 装配 AgentSession、扩展与工具授权；`runtime.ts` 配置类型、默认值与通用模型请求；`platform/` 平台契约与 QQ 适配。
 - Web 工作台说明与启动：`apps/web/README.md`；React 入口是 `apps/web/src/App.tsx`
+- 桌面端说明：`apps/desktop/README.md`（Electron 启动器 + 版本管理器；`src/main/index.ts` 是主进程入口，`src/main/service.ts` 管服务进程启停，`src/main/relink.ts` 管解压后的 workspace 链接）
 - Pi 迁移边界：`docs/10-技术架构/04-Pi移植记录.md`
 - 当前产品进度：`docs/00-产品与全局/03-路线图.md`
 - 消息流水线与安全约束：`docs/10-技术架构/02-消息处理与安全.md`
